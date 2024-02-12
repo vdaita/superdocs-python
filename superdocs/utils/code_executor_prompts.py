@@ -1,0 +1,5 @@
+DIFF_PROMPT = """
+"""
+
+SEARCH_AND_REPLACE_BLOCK_PROMPT = """
+"""

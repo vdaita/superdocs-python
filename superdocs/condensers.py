@@ -9,6 +9,9 @@ import tiktoken
 from ragatouille import RAGPretrainedModel
 from transformers import pipeline
 
+LLM_RERANKER_PROMPT = """
+"""
+
 class BARTSummarizer():
     def __init__(self, model_name="Falconsai/text_summarization"):
         self.summarizer = pipeline("summarization", model="Falconsai/text-summarization")
