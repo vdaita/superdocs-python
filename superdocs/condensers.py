@@ -11,11 +11,35 @@ from transformers import pipeline
 from utils.gpt_output_utils import extract_code_block_data
 
 LLM_RERANKER_PROMPT = """
+Give a relevance score for each snippet ranging from 1-10 in solving the goal of the objective. Format your response in the form of a JSON array.
+For example, you will be given a list of snippets:
+
+Example instruction:
+Objective: Find something
+# Snippets: 
+
+Snippet 1: Text 1
+Snippet 2: Text 2
+...
+
+Example output:
+```json
+[
+    {
+        "snippet_id": 1,
+        "relevance": 10
+    }
+]
+```
 """
 
 class CohereReranker():
     def __init__(self, api_key):
-        pass
+        import cohere
+        self.co = cohere.Client(api_key)
+    def rerank(self, contents, objective, output_counts=10):
+        results = self.co.rerank(query=objective, documents=contents, top_n=output_counts, model='rerank-english-v2.0')
+        return [r.document['text'] for r in results]
 
 class BARTSummarizer():
     def __init__(self, model_name="Falconsai/text_summarization"):
@@ -30,7 +54,7 @@ class BARTSummarizer():
 class RagatouilleReranker():
     def __init__(self):
         self.RAG = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
-    def rerank(self, contents, objective, output_count, combine_output=True):
+    def rerank(self, contents, objective, output_count=10, combine_output=True):
         if output_count > len(contents):
             if combine_output:
                 results = ["------\n".join([snippet for snippet in contents])]
@@ -61,7 +85,7 @@ class LLMReranker():
         self.openai = OpenAI(api_key=api_key, base_url=base_url)
         self.encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
     
-    def rerank(self, contents, objective, output_count, process_chunk_count, combine_output=False): 
+    def rerank(self, contents, objective, output_count=10, process_chunk_count=10, combine_output=False): 
         # random.shuffle(contents)
         scored_snippets = []
 
