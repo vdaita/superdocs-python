@@ -16,6 +16,7 @@ def ask():
     def generate_response():
         yield json.dumps({"information": "Started processing information!"})
 
+
     return app.response_class(stream_with_context(generate_response()))
 
 @app.post("/send_response")

@@ -8,19 +8,23 @@ import tiktoken
 
 from ragatouille import RAGPretrainedModel
 from transformers import pipeline
+from utils.gpt_output_utils import extract_code_block_data
 
 LLM_RERANKER_PROMPT = """
 """
 
+class CohereReranker():
+    def __init__(self, api_key):
+        pass
+
 class BARTSummarizer():
     def __init__(self, model_name="Falconsai/text_summarization"):
-        self.summarizer = pipeline("summarization", model="Falconsai/text-summarization")
+        self.summarizer = pipeline("summarization", model=model_name)
 
     def summarized(self, contents, objective):
         content_input = f"## Information about {objective} \n \n {contents}"
         summarized = self.summarizer(content_input, max_length=1000, min_length=100, do_sample=False)
         return summarized
-
 
 
 class RagatouilleReranker():
@@ -56,13 +60,6 @@ class LLMReranker():
         self.process_chunk_count = process_chunk_count
         self.openai = OpenAI(api_key=api_key, base_url=base_url)
         self.encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
-
-    def extract_json_code_blocks(self, md_text):
-        # Regular expression pattern for matching diff code blocks
-        pattern = r'```json([\s\S]*?)```'
-        # Find all diff code blocks using the pattern
-        json_code_blocks = re.findall(pattern, md_text, re.MULTILINE)
-        return json_code_blocks
     
     def rerank(self, contents, objective, output_count, process_chunk_count, combine_output=False): 
         # random.shuffle(contents)
@@ -101,7 +98,7 @@ class LLMReranker():
 
             # Should expect a JSON response
             response = response.choices[0].message.content
-            json_blocks = self.extract_json_code_blocks(response)
+            json_blocks = extract_code_block_data(response, "json")
 
             for block in json_blocks:
                 block = json.loads(block)
@@ -131,8 +128,3 @@ class LLMReranker():
             return results
 
         return scored_snippets[:min(output_count, len(scored_snippets))]
-
-            
-
-            
-        

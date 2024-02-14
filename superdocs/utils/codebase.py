@@ -68,27 +68,33 @@ def list_non_ignored_files(directory):
     non_ignored_files = result.stdout.splitlines()
     return non_ignored_files
 
-class CodebaseRetriever:
-    def __init__(self, path, verbose=True):
-        self.path = path
-        self.verbose = verbose
 
-    def generate_documents(self, chunker=tree_sitter_chunker):
-        non_ignored_files = list_non_ignored_files(self.path)
+def generate_documents(self, path, verbose=False, chunker=tree_sitter_chunker):
+    non_ignored_files = list_non_ignored_files(path)
 
-        if self.verbose:
-            print("Found non ignored files: ", non_ignored_files)
+    if verbose:
+        print("Found non ignored files: ", non_ignored_files)
 
-        for rfilepath in non_ignored_files:
-            extension = rfilepath.split(".")[-1]
-            if not(extension in language_map.keys()):
-                continue
-            full_filepath = os.path.join(self.path, rfilepath)
-            file = open(full_filepath, "r")
-            contents = file.read()
+    all_chunks = []
 
-            chunked = chunker(contents)
-            return [f"Filename: {rfilepath} \n Content: {text}" for text in chunked]
+    for rfilepath in non_ignored_files:
+        extension = rfilepath.split(".")[-1]
+        if not(extension in language_map.keys()):
+            continue
+        full_filepath = os.path.join(path, rfilepath)
+        file = open(full_filepath, "r")
+        contents = file.read()
+
+        chunked = chunker(contents)
+        all_chunks.extend([
+            {
+                "content": f"Filename: {rfilepath} \n Content: {text}",
+                "filename": rfilepath
+            }
+            for text in chunked
+        ])
+
+    return all_chunks
 
 def find_closest_file(directory, filepath, threshold=95):
     files = list_non_ignored_files(directory)

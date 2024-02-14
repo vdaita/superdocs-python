@@ -5,7 +5,7 @@ from unidiff import PatchSet
 import json
 import os
 # from .sweep_search_and_replace import find_best_match
-from codebase import find_closest_file
+from superdocs.utils.codebase import find_closest_file
 from utils.search_and_replace import find_best_match
 from utils.gpt_output_utils import extract_code_block_data, extract_xml_tags
 
