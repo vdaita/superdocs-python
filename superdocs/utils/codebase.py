@@ -88,7 +88,7 @@ def generate_documents(self, path, verbose=False, chunker=tree_sitter_chunker):
         chunked = chunker(contents)
         all_chunks.extend([
             {
-                "content": f"Filename: {rfilepath} \n Content: {text}",
+                "content": f"Filename: {rfilepath} \n Snippet: ```{text}```",
                 "filename": rfilepath
             }
             for text in chunked

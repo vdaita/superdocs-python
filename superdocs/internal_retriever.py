@@ -1,4 +1,4 @@
-from utils.codebase import list_non_ignored_files, CodebaseRetriever
+from utils.codebase import list_non_ignored_files, generate_documents
 import os
 import chromadb
 import time
@@ -11,20 +11,23 @@ class CodebaseRetriever():
     def __init__(self, directory, splitter=None):
         self.directory = directory
         self.chroma_client = chromadb.Client()
-        self.collection = self.chroma_client.create_collection(name="snippets")
+        self.splitter = splitter
 
-        self.codebase_retriever = CodebaseRetriever(self.directory, verbose=True)
-        
-        if splitter:
-            chunks = self.codebase_retriever.generate_documents(splitter=splitter)
+    def load_all_documents(self):        
+        if self.splitter:
+            chunks = generate_documents(splitter=self.splitter)
         else:
-            chunks = self.codebase_retriever.generate_documents()
+            chunks = generate_documents()
         
+        # Put everything in the vectorstore
+        self.chrome_client.delete_collection(name="snippets")
+        self.collection = self.chroma_client.create_collection(name="snippets")
         self.collection.add(
             documents=[chunk["content"] for chunk in chunks],
             metadata=[{"time": time.time(), "filename": chunk["filename"]} for chunk in chunks]
         )
         
+        # BM25 Tokenizer
         tokenized_chunks = []
         for chunk in chunks:
             tokenized_chunks.append(re.findall(r'\b\w+\b|(?=[A-Z])|_', chunk["content"]))
