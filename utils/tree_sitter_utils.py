@@ -80,7 +80,7 @@ def chunker(
     # 2. Filling in the gaps
     for prev, curr in zip(chunks[:-1], chunks[1:]):
         prev.end = curr.start
-    curr.start = tree.root_node.end_byte
+        curr.start = tree.root_node.end_byte
 
     # 3. Combining small chunks with bigger ones
     new_chunks = []

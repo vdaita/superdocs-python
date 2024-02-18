@@ -9,29 +9,7 @@ import tiktoken
 from ragatouille import RAGPretrainedModel
 from transformers import pipeline
 from utils.gpt_output_utils import extract_code_block_data
-
-LLM_RERANKER_PROMPT = """
-Give a relevance score for each snippet ranging from 1-10 in solving the goal of the objective. Format your response in the form of a JSON array.
-For example, you will be given a list of snippets:
-
-Example instruction:
-Objective: Find something
-# Snippets: 
-
-Snippet 1: Text 1
-Snippet 2: Text 2
-...
-
-Example output:
-```json
-[
-    {
-        "snippet_id": 1,
-        "relevance": 10
-    }
-]
-```
-"""
+from utils.prompts import LLM_RERANKER_PROMPT
 
 class CohereReranker():
     def __init__(self, api_key):

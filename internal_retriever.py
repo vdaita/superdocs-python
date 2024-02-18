@@ -3,6 +3,7 @@ import os
 import chromadb
 import time
 import re
+import uuid
 
 from rank_bm25 import BM25Okapi
 
@@ -15,16 +16,18 @@ class CodebaseRetriever():
 
     def load_all_documents(self):        
         if self.splitter:
-            chunks = generate_documents(splitter=self.splitter)
+            chunks = generate_documents(self.directory, splitter=self.splitter)
         else:
-            chunks = generate_documents()
+            chunks = generate_documents(self.directory)
         
         # Put everything in the vectorstore
-        self.chrome_client.delete_collection(name="snippets")
-        self.collection = self.chroma_client.create_collection(name="snippets")
+            
+        # self.chroma_client.delete_collection(name="snippets")
+        self.collection = self.chroma_client.get_or_create_collection(name="snippets")
         self.collection.add(
             documents=[chunk["content"] for chunk in chunks],
-            metadata=[{"time": time.time(), "filename": chunk["filename"]} for chunk in chunks]
+            metadatas=[{"time": time.time(), "filename": chunk["filename"]} for chunk in chunks],
+            ids=[str(uuid.uuid4()) for _ in chunks]
         )
         
         # BM25 Tokenizer

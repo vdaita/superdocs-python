@@ -1,13 +1,12 @@
 from readability import Document
-from markdownify import markdownity as md
+from markdownify import markdownify as md
 from googlesearch import search
 import requests
 from openai import OpenAI
 
 class PerplexityExternalSearch:
-    def __init__(self, api_key, model_name):
+    def __init__(self, api_key):
         self.api_key = api_key
-        self.model_name = model_name
         self.client = OpenAI(
             base_url="https://api.perplexity.ai",
             api_key=self.api_key

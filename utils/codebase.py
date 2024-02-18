@@ -2,14 +2,11 @@ import os
 import subprocess
 from tree_sitter_languages import get_language, get_parser
 from tree_sitter import Tree, Node
-from dataclasses import dataclasses
 from utils.tree_sitter_utils import chunker
 import json
-from superdocs.utils.gpt_output_utils import extract_json_code_data
+from .gpt_output_utils import extract_code_block_data
 from thefuzz import process, fuzz
-
-CODE_SPLIT_PROMPT = """
-"""
+from utils.prompts import CODE_SPLIT_PROMPT
 
 language_map = {
     "py": "python",
@@ -43,7 +40,7 @@ def generate_llm_chunker(client):
             response = response.choices[0].message.content
             lines = contents.split("\n")
 
-            response = json.loads(extract_json_code_data(response)[0])
+            response = json.loads(extract_code_block_data(response, "json")[0])
             docs = []
             for chunk in response:
                 chunk['end'] = max(chunk['end'], len(lines) - 1) # about what the final index, inclusive should be
@@ -60,7 +57,7 @@ def tree_sitter_chunker(contents, filename):
     extension = filename.split(".")[-1]
     parser = get_parser(language_map[extension])
     tree = parser.parse(contents.encode())
-    chunks = chunker(tree, contents.encode())
+    chunks = chunker(tree, contents)
     return [chunk.extract(contents) for chunk in chunks]
 
 def list_non_ignored_files(directory):
@@ -69,8 +66,8 @@ def list_non_ignored_files(directory):
     return non_ignored_files
 
 
-def generate_documents(self, path, verbose=False, chunker=tree_sitter_chunker):
-    non_ignored_files = list_non_ignored_files(path)
+def generate_documents(directory, verbose=False, chunker=tree_sitter_chunker):
+    non_ignored_files = list_non_ignored_files(directory)
 
     if verbose:
         print("Found non ignored files: ", non_ignored_files)
@@ -81,11 +78,11 @@ def generate_documents(self, path, verbose=False, chunker=tree_sitter_chunker):
         extension = rfilepath.split(".")[-1]
         if not(extension in language_map.keys()):
             continue
-        full_filepath = os.path.join(path, rfilepath)
+        full_filepath = os.path.join(directory, rfilepath)
         file = open(full_filepath, "r")
         contents = file.read()
 
-        chunked = chunker(contents)
+        chunked = chunker(contents, rfilepath)
         all_chunks.extend([
             {
                 "content": f"Filename: {rfilepath} \n Snippet: ```{text}```",
