@@ -10,7 +10,7 @@ import os
 from utils.gpt_output_utils import extract_xml_tags
 from internal_retriever import CodebaseRetriever
 from external_retrieval import PerplexityExternalSearch
-from code_executor import process_with_search_replace_blocks
+from code_executor import process_with_search_replace_blocks, process_with_diffs
 from refinement import run_refinement_chain
 from utils.codebase import find_closest_file
 from utils.prompts import INFORMATION_RETRIEVAL_PROMPT, PLAN_WRITING_PROMPT
@@ -44,13 +44,13 @@ def simple_request(system_prompt, query, model_name="gpt-4-0125-preview"):
 def generate_multifile_response(directory, objective, snippets):
     pass
 
-def generate_response(directory, objective, snippets):
+def generate_response(directory, objective, snippets, verbose=True, use_vectorstore=True, user_input=False):
         global codebase_retriever
         yield json.dumps({"information": "Started processing information!"})
     
         # Perform information retrieval
         if not(codebase_retriever.directory) == directory:
-            codebase_retriever = CodebaseRetriever(directory)
+            codebase_retriever = CodebaseRetriever(directory, use_vectorstore=use_vectorstore)
             codebase_retriever.load_all_documents()
             yield json.dumps({"information": "Loading vectorstore search for your codebase."})
         else:
@@ -59,38 +59,47 @@ def generate_response(directory, objective, snippets):
         model_request = simple_request(INFORMATION_RETRIEVAL_PROMPT, f"Objective: {objective} \n \n Existing information {snippets}")
         
         information = snippets
-
-        while True:
+        
+        for _ in range(1): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
             # With the queries, run the corresponding searches
-            external_queries = extract_xml_tags(model_request, "e")
-            internal_queries = extract_xml_tags(model_request, "i")
-            file_read_queries = extract_xml_tags(model_request, "f")
+            external_queries = extract_xml_tags(model_request, "a")
+            internal_queries = extract_xml_tags(model_request, "b")
+            # file_read_queries = extract_xml_tags(model_request, "f")
 
-            new_information = snippets
+            if verbose:
+                print("Processing information retrieval request with: ", model_request)
+                print(" External queries: ", json.dumps(external_queries, indent=4))
+                print(" Internal queries: ", json.dumps(internal_queries, indent=4))
+                # print(" File read queries: ", json.dumps(file_read_queries, indent=4))
+
             for query in external_queries:
-                new_information += f"\n# External Query: {query} \n {external_retriever.answer_question(query)}"
+                if verbose:
+                    print("Processing external query: ", query)
+                external_response = external_retriever.answer_question(query)
+                if verbose:
+                    print("Received response: ", external_response)
+                information += f"\n# External Query: {query} \n {external_response}"
 
             for query in internal_queries:
                 code_snippets = codebase_retriever.retrieve_documents(query, None)
                 code_snippets_string = "\n".join(code_snippets)
-                new_information += f"\n# Codebase Query: {query} \n {code_snippets_string}"
+                information += f"\n# Codebase Query: {query} \n {code_snippets_string}"
             
-            for query in file_read_queries:
-                accurate_file = find_closest_file(directory, query)
-                contents = open(accurate_file, "r").read()
-                new_information = f"\n# File Contents for: {query} \n ```\n{contents}\n```"
-                pass
+            # for query in file_read_queries:
+            #     accurate_file = find_closest_file(directory, query)
+            #     contents = open(accurate_file, "r").read()
+            #     information += f"\n# File Contents for: {query} \n ```\n{contents}\n```"
 
-            if len(external_queries) == 0 and len(internal_queries) == 0 and len(file_read_queries) == 0:
+            if len(external_queries) == 0 and len(internal_queries) == 0: # and len(file_read_queries) == 0:
                 break
                 
-            information += new_information
 
         # Send back the documents and ask for feedback
-        yield json.dumps({"All information": information})
-        new_information = wait_for_response(time.time())
-
-        information += new_information
+        yield json.dumps({"All information": information}, indent=4)
+        
+        if user_input:
+            new_information = wait_for_gui_response(time.time())
+            information = new_information
 
         # (potentially) Rerun the information retrieval process
 
@@ -102,17 +111,22 @@ def generate_response(directory, objective, snippets):
         )
 
         # Get feedback
-        yield json.dumps({"Feedback: ", plan})
-        plan = wait_for_response(time.time())
+        yield json.dumps({"Feedback: ": plan})
+
+        if user_input:
+            plan = wait_for_gui_response(time.time())
 
         # Generate diffs
-        changes = process_with_search_replace_blocks(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
+        changes = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
+        
+        if verbose:
+            print("Initial changes: ", json.dumps(changes, indent=4))
 
         # Self-refine everything
-        refined_changes = run_refinement_chain(directory, changes, objective, information, openai_model, process_with_search_replace_blocks)
+        refined_changes = run_refinement_chain(directory, changes, objective, information, openai_model, process_with_diffs)
 
         # Return a set of changes to the user
-        return refined_changes
+        yield json.dumps({"changes": refined_changes})
 
 @app.post("/process")
 def ask():
@@ -128,15 +142,29 @@ def send_response():
     response_time = time.time()
     return {'ok': True}
 
-def wait_for_response(request_time):
+def wait_for_gui_response(request_time):
     global response, response_time
     while request_time < response_time:
-        return response
+        time.sleep(0.5)
+    return response
     
 if __name__ == "__main__":
+    directory = "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main"
+    filepath = "/app/pages/quiz/page.tsx"
+    file_snippet = open(directory + filepath).read()
     for value in generate_response(
-        "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main", 
-        "In the main quiz page, add a modal for when the quiz is over that shows the score and allows you to retake the quiz.", 
-        ""):
-        print(value)
+            directory, 
+            "In the main quiz page, add a modal for when the quiz is over that shows the score and allows you to retake the quiz.", 
+            f"Filepath: {filepath} \n ```\n{file_snippet}\n```",
+            use_vectorstore=False
+        ):
+        print(json.dumps(json.loads(value), indent=4))
+        ret_object = json.loads(value)
+        if "changes" in ret_object:
+            should_apply = input("Apply to rewrite? Send Y for yes. ")
+            if should_apply.strip().lower() == "y":
+                for change in ret_object["changes"]:
+                    file_snippet.replace(change["original"], change["new"])
+        
+        print(file_snippet)
     # app.run(port=8123, debug=True)

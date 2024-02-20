@@ -2,30 +2,30 @@ INFORMATION_RETRIEVAL_PROMPT = """
 You are a development assistant, responsible for finding and requesting information to solve the objective.
 From the provided query and existing context, you are responsible for determining what kind of further information should be gathered.
 To request further information, you can use the following four tags:
-I queries are for searching for content within the user's current codebase, such as asking for where specific method definitions are or where are specific pieces of code that complete certain functionality: <i>query</i>
-E queries use Google for retrieval external API documentation, tutorials for solving coding problems not within the database, consulting externally for errors, finding tools to use, etc.: <e>query</e>
+A queries are for searching for content within the user's current codebase, such as asking for where specific method definitions are or where are specific pieces of code that complete certain functionality: <a>query</a>
+B queries use Google for retrieval external API documentation, tutorials for solving coding problems not within the database, consulting externally for errors, finding tools to use, etc.: <b>query</b>
 Add as much context, such as programming language or framework when making requests.
 Complete all the requests you think you need at one go.
 Think step-by-step.
 
 Your first step should be to identify all the relevant libraries that are being used by the program (such as UI libraries, networking libraries, etc.).
 Your second step is to identify the queries you want.
-Your third step is to identify, for each query, whether or not it will be an I or E query (state why).
+Your third step is to identify, for each query, whether or not it will be an A or B query (state why).
 
 Do not write any code planning or coding suggestions under any circumstances.
-You can provide multiple queries at one go.
+You can provide multiple queries at one go. Use minimal queries.
 
 # Example conversation 1
 
 ## USER: Objective: Write a script that pulls images of buzzcuts from google images
 Code: # Code written in Python or in a .py file...
 
-## ASSISTANT: <e>Python libraries for downloading google images</e> <e>Python script for downloading images from google</e>
+## ASSISTANT: <a>Python libraries for downloading google images</a> <a>Python script for downloading images from google</a>
 
 # Example conversation 2
 
 ## USER: Objective: Find where in the code do I make network requests to the GitHub api
-## ASSISTANT: <i>network requests, GitHub</i>
+## ASSISTANT: <b>network requests, GitHub</b>
 """
 
 PLAN_WRITING_PROMPT = """
@@ -69,7 +69,6 @@ Please do not truncate code for brevity.
 Here are the search-replace blocks for those changes:
 
 <blocks>
-
 <block>
 <filename>mathweb/flask/app.py</filename>
 <search>
@@ -83,9 +82,44 @@ class MathWeb:
 </block>
 
 <block>
-<filename></filename>
-<search></search>
-<replace></replace>
+<filename>mathweb/flask/app.py</filename>
+<search>
+def is_prime(x):
+    if x < 2:
+        return False
+    for i in range(2, int(math.sqrt(x)) + 1):
+        if x % i == 0:
+            return False
+    return True
+</search>
+<replace>
+</replace>
+</block>
+
+<block>
+<filename>mathweb/flask/app.py</filename>
+<search>
+@app.route('/prime/<int:n>')
+def nth_prime(n):
+    count = 0
+    num = 1
+    while count < n:
+        num += 1
+        if is_prime(num):
+            count += 1
+    return str(num)
+</search>
+<replace>
+@app.route('/prime/<int:n>')
+def nth_prime(n):
+    count = 0
+    num = 1
+    while count < n:
+        num += 1
+        if sympy.isprime(num):
+            count += 1
+    return str(num)
+</replace>
 </block>
 </blocks>
 """

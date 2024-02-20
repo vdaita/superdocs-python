@@ -12,7 +12,7 @@ from utils.prompts import SEARCH_REPLACE_PROMPT, PLAN_WRITING_PROMPT, DIFF_PROMP
 
 def process_with_search_replace_blocks(model, directory, input_text):
     response = model.chat.completions.create(
-        model="gpt-4-turbo-0116",
+        model="gpt-4-0125-preview",
         messages=[{
             "role": "system",
             "content": SEARCH_REPLACE_PROMPT
@@ -33,7 +33,13 @@ def process_with_search_replace_blocks(model, directory, input_text):
         search_portion = extract_xml_tags(block, "search")
         replace_portion = extract_xml_tags(block, "replace")
 
-        filename = find_closest_file(filename)
+        if len(filename) == 0 or len(search_portion) == 0 or len(replace_portion) == 0:
+            print("A subblock was missed in search-replace.")
+            continue
+            
+        filename, search_portion, replace_portion = filename[0], search_portion[0], replace_portion[0]
+
+        filename = find_closest_file(directory, filename)
         full_filepath = os.path.join(directory, filename)
         lines = open(full_filepath, "r").read().splitlines()
 
@@ -43,7 +49,7 @@ def process_with_search_replace_blocks(model, directory, input_text):
         changes.append({
             "filename": filename,
             "original": search_portion,
-            "replace": replace_portion
+            "new": replace_portion
         })
 
     return changes
@@ -51,7 +57,7 @@ def process_with_search_replace_blocks(model, directory, input_text):
 
 def process_with_diffs(model, directory, input_text):
     response = model.chat.completions.create(
-        model="gpt-4-turbo-0116",
+        model="gpt-4-0125-preview",
         messages=[{
             "role": "system",
             "content": DIFF_PROMPT
@@ -146,8 +152,8 @@ def fuzzy_process_diff(directory, diff, verbose=False): # expects the contents o
         if len(old_code) > 0 and len(new_code) > 0:
             matched_diffs.append(
                 {
-                    "filepath": filepath,
-                    "old": old_code,
+                    "filename": filepath,
+                    "original": old_code,
                     "new": new_code
                 }
             )

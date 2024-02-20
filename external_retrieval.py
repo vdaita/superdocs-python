@@ -18,13 +18,14 @@ class PerplexityExternalSearch:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an information gatherer for an automated coding bot."
+                    "content": "You are an information gatherer for an automated coding bot. Be concise"
                 },
                 {
                     "role": "user",
                     "content": question
                 }
-            ]
+            ],
+            max_tokens=512
         )
         return response.choices[0].message.content
 
