@@ -2,7 +2,7 @@
 
 Currently, the main Superdocs repository has both the VSCode extension and the Python server. However, for ease of extensibility and testing, I wanted to break out the code-editing functionality into a Python library.
 
-This project is largely inspired by Sweep.dev and Aider.
+This project is largely inspired by Sweep.dev and Aider. Refinement inspired by the Molecul AI repo. 
 
 There are few main steps to creating diffs that Superdocs goes through:
 1. Information retrieval

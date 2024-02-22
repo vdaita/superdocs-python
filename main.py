@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import os
 
+import time
+
 from utils.gpt_output_utils import extract_xml_tags
 from internal_retriever import CodebaseRetriever
 from external_retrieval import PerplexityExternalSearch
@@ -14,6 +16,7 @@ from code_executor import process_with_search_replace_blocks, process_with_diffs
 from refinement import run_refinement_chain
 from utils.codebase import find_closest_file
 from utils.prompts import INFORMATION_RETRIEVAL_PROMPT, PLAN_WRITING_PROMPT
+from utils.model import create_model
 
 load_dotenv(".env")
 
@@ -25,21 +28,28 @@ response, response_time = "", -1
 codebase_retriever = CodebaseRetriever("")
 external_retriever = PerplexityExternalSearch(os.environ["PERPLEXITY_API_KEY"])
 
-openai_model = OpenAI(
-    api_key=os.environ["OPENAI_API_KEY"],
+openai_model = create_model(
+    os.environ["OPENAI_API_KEY"],
+    "gpt-4-0125-preview"
 )
 
-def simple_request(system_prompt, query, model_name="gpt-4-0125-preview"):
-    response = openai_model.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ],
-        max_tokens=2048,
-        temperature=0.1
-    )
-    return response.choices[0].message.content
+plan_model = create_model(
+    os.environ["TOGETHER_API_KEY"],
+    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+    base_url="https://api.together.xyz"
+)
+information_request_model = create_model(
+    os.environ["TOGETHER_API_KEY"],
+    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+    base_url="https://api.together.xyz"
+) # Make this a decent information request model as well
+coding_model = create_model(
+    os.environ["TOGETHER_API_KEY"],
+    "deepseek-ai/deepseek-coder-33b-instruct",
+    base_url="https://api.together.xyz"
+)
+
+# plan_model, information_request_model, coding_model = openai_model, openai_model, openai_model
 
 def generate_multifile_response(directory, objective, snippets):
     pass
@@ -56,10 +66,16 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         else:
             yield json.dumps({"information": "Existing codebase retriever works."})
 
-        model_request = simple_request(INFORMATION_RETRIEVAL_PROMPT, f"Objective: {objective} \n \n Existing information {snippets}")
-        
+        start_time = time.time()
+        model_request = information_request_model(INFORMATION_RETRIEVAL_PROMPT,[f"Objective: {objective} \n \n Existing information {snippets}"])
+        end_time = time.time()
+
+        if verbose:
+            print("Performed Information Retrieval Request: ", (end_time - start_time))
+
         information = snippets
         
+        start_time = time.time()
         for _ in range(1): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
             # With the queries, run the corresponding searches
             external_queries = extract_xml_tags(model_request, "a")
@@ -92,7 +108,10 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
 
             if len(external_queries) == 0 and len(internal_queries) == 0: # and len(file_read_queries) == 0:
                 break
-                
+        end_time = time.time()
+
+        if verbose:
+            print("Performed all information retrieval requests: ", (start_time - end_time))
 
         # Send back the documents and ask for feedback
         yield json.dumps({"All information": information}, indent=4)
@@ -104,11 +123,16 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         # (potentially) Rerun the information retrieval process
 
         # Generate an implementation plan
-        plan = simple_request(
+        start_time = time.time()
+        plan = plan_model(
             PLAN_WRITING_PROMPT, 
-            f"""Given the provided information and the objective, write a plan to complete it. 
-            Do not write any code. Objective: {objective} \n \n Information: {information}"""
+            [f"""Given the provided information and the objective, write a plan to complete it. 
+            Do not write any code. Objective: {objective} \n \n Information: {information}"""]
         )
+        end_time = time.time()
+
+        if verbose:
+            print("Generated plan in: ", (start_time - end_time))
 
         # Get feedback
         yield json.dumps({"Feedback: ": plan})
@@ -116,14 +140,22 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         if user_input:
             plan = wait_for_gui_response(time.time())
 
+        start_time = time.time()
         # Generate diffs
         changes = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
-        
+        end_time = time.time()
+
         if verbose:
+            print("Processing initial diff: ", (end_time - start_time))
             print("Initial changes: ", json.dumps(changes, indent=4))
 
         # Self-refine everything
+        start_time = time.time()
         refined_changes = run_refinement_chain(directory, changes, objective, information, openai_model, process_with_diffs)
+        end_time = time.time()
+
+        if verbose:
+            print("Finishing refinement in time: ", end_time - start_time)
 
         # Return a set of changes to the user
         yield json.dumps({"changes": refined_changes})

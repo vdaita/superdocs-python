@@ -11,19 +11,7 @@ from utils.gpt_output_utils import extract_code_block_data, extract_xml_tags
 from utils.prompts import SEARCH_REPLACE_PROMPT, PLAN_WRITING_PROMPT, DIFF_PROMPT
 
 def process_with_search_replace_blocks(model, directory, input_text):
-    response = model.chat.completions.create(
-        model="gpt-4-0125-preview",
-        messages=[{
-            "role": "system",
-            "content": SEARCH_REPLACE_PROMPT
-        }, {
-            "role": "user",
-            "content": input_text
-        }],
-        max_tokens=2048,
-        temperature=0.1
-    )
-    response = response.choices[0].message.content
+    response = model(SEARCH_REPLACE_PROMPT, [input_text])
     blocks = extract_xml_tags(response, "block")
 
     changes = []
@@ -56,19 +44,7 @@ def process_with_search_replace_blocks(model, directory, input_text):
 
 
 def process_with_diffs(model, directory, input_text):
-    response = model.chat.completions.create(
-        model="gpt-4-0125-preview",
-        messages=[{
-            "role": "system",
-            "content": DIFF_PROMPT
-        }, {
-            "role": "user",
-            "content": input_text
-        }],
-        max_tokens=2048,
-        temperature=0.1
-    )
-    response = response.choices[0].message.content
+    response = model(DIFF_PROMPT, [input_text])
     diffs = extract_code_block_data(response, "diff")
     changes = []
     for diff in diffs:

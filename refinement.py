@@ -1,8 +1,9 @@
 import os
 
-def run_refinement_chain(directory, changes, objective, information, model, execution_function):
+def run_refinement_chain(directory, changes, objective, information, model, execution_function, iteration=3):
     # First, load each file involved in changes and apply the corresponding edits
     # Return those changes to the user or a boolean if the changes are finally done. 
+    print("Running refinement chain on iteration: ", (3 - iteration))
     files = {}
     for change in changes:
         full_filepath = os.path.join(directory, change["filename"])
@@ -14,9 +15,11 @@ def run_refinement_chain(directory, changes, objective, information, model, exec
 
     for change in changes:
         files[change["filename"]]["new"].replace(change["original"], change["new"])
+
+    new_changes = []
     
     for file in files:
-        new_changes = execution_function(
+        file_new_changes = execution_function(
             model, 
             directory, 
             f"""
@@ -30,14 +33,17 @@ def run_refinement_chain(directory, changes, objective, information, model, exec
             These are the new files, with your modifications included.
             {files[file]["new"]}
             ----
-            Check to make sure that all of the code changes you made are accurate. Be meticulous and think step-by-step.
+            Check the new file to ensure that all necessary changes are applied. Be meticulous and think step-by-step.
+
             Ensure that imports and dependencies are correctly implemented. 
-            If you don't require any further changes (i.e. this looks good) print done.
+            If the new file includes all necessary changes, output "DONE" and DO NOT make any further diff edits. 
             Otherwise, make your edits!
             """
         ) # Ensure that the changes are accurate (requires the contextual data) and the code changes are correct
-        
-    if len(changes) == 0:
+        new_changes += file_new_changes
+
+    if len(new_changes) == 0 or (iteration - 1) == 0:
+        print("Refinements completed.")
         return changes + new_changes
     else:
-        return run_refinement_chain(directory, changes + new_changes, objective, information, model, execution_function)
+        return run_refinement_chain(directory, changes + new_changes, objective, information, model, execution_function, iteration=iteration - 1)
