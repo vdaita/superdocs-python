@@ -10,4 +10,4 @@ There are few main steps to creating diffs that Superdocs goes through:
 3. Writing code changes
 4. Editing the code changes for accuracy.
 
-Ideally, these should be as customizable as possible, with there being the ability to swap out different as
+Ideally, these should be as customizable as possible, with there being the ability to swap out different output processing functions and models at will.
