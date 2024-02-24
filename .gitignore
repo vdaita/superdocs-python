@@ -1,3 +1,6 @@
+test_diff.txt
+*.html
+
 # Editors
 .vscode/
 .idea/

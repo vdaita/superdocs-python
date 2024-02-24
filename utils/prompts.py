@@ -227,6 +227,8 @@ You are diligent and tireless!
 You NEVER leave comments describing code without implementing it!
 You always COMPLETELY IMPLEMENT the needed code!
 Please do not truncate code for brevity.
+
+For each hunk in your diff, write at least 10 lines of original code to provide context.
 """
 
 LLM_RERANKER_PROMPT = """

@@ -75,40 +75,40 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
 
         information = snippets
         
-        start_time = time.time()
-        for _ in range(1): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
-            # With the queries, run the corresponding searches
-            external_queries = extract_xml_tags(model_request, "a")
-            internal_queries = extract_xml_tags(model_request, "b")
-            # file_read_queries = extract_xml_tags(model_request, "f")
+        # start_time = time.time()
+        # for _ in range(1): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
+        #     # With the queries, run the corresponding searches
+        #     external_queries = extract_xml_tags(model_request, "a")
+        #     internal_queries = extract_xml_tags(model_request, "b")
+        #     # file_read_queries = extract_xml_tags(model_request, "f")
 
-            if verbose:
-                print("Processing information retrieval request with: ", model_request)
-                print(" External queries: ", json.dumps(external_queries, indent=4))
-                print(" Internal queries: ", json.dumps(internal_queries, indent=4))
-                # print(" File read queries: ", json.dumps(file_read_queries, indent=4))
+        #     if verbose:
+        #         print("Processing information retrieval request with: ", model_request)
+        #         print(" External queries: ", json.dumps(external_queries, indent=4))
+        #         print(" Internal queries: ", json.dumps(internal_queries, indent=4))
+        #         # print(" File read queries: ", json.dumps(file_read_queries, indent=4))
 
-            for query in external_queries:
-                if verbose:
-                    print("Processing external query: ", query)
-                external_response = external_retriever.answer_question(query)
-                if verbose:
-                    print("Received response: ", external_response)
-                information += f"\n# External Query: {query} \n {external_response}"
+        #     for query in external_queries:
+        #         if verbose:
+        #             print("Processing external query: ", query)
+        #         external_response = external_retriever.answer_question(query)
+        #         if verbose:
+        #             print("Received response: ", external_response)
+        #         information += f"\n# External Query: {query} \n {external_response}"
 
-            for query in internal_queries:
-                code_snippets = codebase_retriever.retrieve_documents(query, None)
-                code_snippets_string = "\n".join(code_snippets)
-                information += f"\n# Codebase Query: {query} \n {code_snippets_string}"
+        #     for query in internal_queries:
+        #         code_snippets = codebase_retriever.retrieve_documents(query, None)
+        #         code_snippets_string = "\n".join(code_snippets)
+        #         information += f"\n# Codebase Query: {query} \n {code_snippets_string}"
             
-            # for query in file_read_queries:
-            #     accurate_file = find_closest_file(directory, query)
-            #     contents = open(accurate_file, "r").read()
-            #     information += f"\n# File Contents for: {query} \n ```\n{contents}\n```"
+        #     # for query in file_read_queries:
+        #     #     accurate_file = find_closest_file(directory, query)
+        #     #     contents = open(accurate_file, "r").read()
+        #     #     information += f"\n# File Contents for: {query} \n ```\n{contents}\n```"
 
-            if len(external_queries) == 0 and len(internal_queries) == 0: # and len(file_read_queries) == 0:
-                break
-        end_time = time.time()
+        #     if len(external_queries) == 0 and len(internal_queries) == 0: # and len(file_read_queries) == 0:
+        #         break
+        # end_time = time.time()
 
         if verbose:
             print("Performed all information retrieval requests: ", (start_time - end_time))
@@ -149,16 +149,16 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
             print("Processing initial diff: ", (end_time - start_time))
             print("Initial changes: ", json.dumps(changes, indent=4))
 
-        # Self-refine everything
-        start_time = time.time()
-        refined_changes = run_refinement_chain(directory, changes, objective, information, openai_model, process_with_diffs)
-        end_time = time.time()
+        # # Self-refine everything
+        # start_time = time.time()
+        # refined_changes = run_refinement_chain(directory, changes, objective, information, openai_model, process_with_diffs) # TODO: have the refinement chain work with the new version of the files as the original
+        # end_time = time.time()
 
-        if verbose:
-            print("Finishing refinement in time: ", end_time - start_time)
+        # if verbose:
+        #     print("Finishing refinement in time: ", end_time - start_time)
 
         # Return a set of changes to the user
-        yield json.dumps({"changes": refined_changes})
+        yield json.dumps({"changes": changes})
 
 @app.post("/process")
 def ask():
@@ -183,7 +183,11 @@ def wait_for_gui_response(request_time):
 if __name__ == "__main__":
     directory = "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main"
     filepath = "/app/pages/quiz/page.tsx"
-    file_snippet = open(directory + filepath).read()
+
+    read_file = open(directory + filepath, "r")
+    file_snippet = read_file.read()
+    read_file.close()
+
     for value in generate_response(
             directory, 
             "In the main quiz page, add a modal for when the quiz is over that shows the score and allows you to retake the quiz.", 
@@ -193,10 +197,14 @@ if __name__ == "__main__":
         print(json.dumps(json.loads(value), indent=4))
         ret_object = json.loads(value)
         if "changes" in ret_object:
+            for filepath in ret_object["changes"]: # For each file
+                print(f"# Filepath: {filepath}")
+                print(ret_object["changes"][filepath])
+
             should_apply = input("Apply to rewrite? Send Y for yes. ")
-            if should_apply.strip().lower() == "y":
-                for change in ret_object["changes"]:
-                    file_snippet.replace(change["original"], change["new"])
-        
-        print(file_snippet)
+            if should_apply.lower() == "y":
+                for filepath in ret_object["changes"]:
+                    file = open(os.path.join(directory, filepath), "w")
+                    file.write(ret_object["changes"][filepath])
+                    file.close()
     # app.run(port=8123, debug=True)
