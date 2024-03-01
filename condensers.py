@@ -11,6 +11,10 @@ from transformers import pipeline
 from utils.gpt_output_utils import extract_code_block_data
 from utils.prompts import LLM_RERANKER_PROMPT
 
+class NoneReranker():
+    def rerank(self, contents, objective, output_counts=10):
+        return contents[:10]
+
 class CohereReranker():
     def __init__(self, api_key):
         import cohere

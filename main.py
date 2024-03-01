@@ -17,6 +17,7 @@ from refinement import run_refinement_chain
 from utils.codebase import find_closest_file
 from utils.prompts import INFORMATION_RETRIEVAL_PROMPT, PLAN_WRITING_PROMPT
 from utils.model import create_model
+from condensers import NoneReranker
 
 load_dotenv(".env")
 
@@ -24,7 +25,7 @@ app = Flask(__name__)
 cors = CORS(app, resources={r"/*": {"origins": "*"}})
 logging.getLogger('flask_cors').level = logging.DEBUG
 
-response, response_time = "", -1
+response, most_recent_response_time = "", -1
 codebase_retriever = CodebaseRetriever("")
 external_retriever = PerplexityExternalSearch(os.environ["PERPLEXITY_API_KEY"])
 
@@ -56,6 +57,14 @@ def generate_multifile_response(directory, objective, snippets):
 
 def generate_response(directory, objective, snippets, verbose=True, use_vectorstore=True, user_input=False):
         global codebase_retriever
+
+        if verbose:
+            print("Received information: ", directory)
+            print("=====OBJECTIVE=====")
+            print(objective)
+            print("=====SNIPPETS=====")
+            print(snippets)
+        
         yield json.dumps({
             "type": "information",
             "content": "Started processing information!"
@@ -74,6 +83,8 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
                 "type": "information",
                 "content": "Existing codebase retriever works."
                 }) + "<sddlm>"
+            
+        print("Received initial snippets: ", snippets)
 
         start_time = time.time()
         model_request = information_request_model(INFORMATION_RETRIEVAL_PROMPT,[f"Objective: {objective} \n \n Existing information {snippets}"])
@@ -87,7 +98,7 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         SPLIT_TOKEN = "------"
         
         start_time = time.time()
-        for _ in range(1): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
+        for _ in range(0): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
             # With the queries, run the corresponding searches
             external_queries = extract_xml_tags(model_request, "a")
             internal_queries = extract_xml_tags(model_request, "b")
@@ -113,7 +124,7 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
                 information += f"{SPLIT_TOKEN}\n# External Query: {query} \n {external_response}"
 
             for query in internal_queries:
-                code_snippets = codebase_retriever.retrieve_documents(query, None)
+                code_snippets = codebase_retriever.retrieve_documents(query, NoneReranker())
                 code_snippets_string = "\n".join(code_snippets)
                 information += f"{SPLIT_TOKEN}\n# Codebase Query: {query} \n {code_snippets_string}"
             
@@ -136,10 +147,12 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         }, indent=4) + "<sddlm>"
         
         if user_input:
+            print("Waiting for GUI Response.")
             new_information = wait_for_gui_response(time.time())
             information = new_information
 
         # (potentially) Rerun the information retrieval process
+        print("Reading information: ", str(information))
 
         # Generate an implementation plan
         start_time = time.time()
@@ -160,6 +173,7 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         }, indent=4) + "<sddlm>"
 
         if user_input:
+            print("Waiting for GUI response")
             plan = wait_for_gui_response(time.time())
 
         start_time = time.time()
@@ -190,15 +204,16 @@ def ask():
 
 @app.post("/send_response")
 def send_response():
-    global response, response_time
+    global response, most_recent_response_time
     data = request.get_json()
+    print("Send_response received input: ", data)
     response = data["message"]
-    response_time = time.time()
+    most_recent_response_time = time.time()
     return {'ok': True}
 
 def wait_for_gui_response(request_time):
     global response, response_time
-    while request_time < response_time:
+    while most_recent_response_time < request_time:
         print("     No response received: waiting for GUI response")
         time.sleep(0.5)
     return response
