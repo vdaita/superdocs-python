@@ -56,6 +56,14 @@ def generate_multifile_response(directory, objective, snippets):
     pass
 
 def generate_response(directory, objective, snippets, verbose=True, use_vectorstore=True, user_input=False):
+        ## Testing code
+        changes = process_with_diffs(openai_model, directory, f"")
+        yield json.dumps({
+            "type": "changes",
+            "content": changes
+        }, indent=4) + "<sddlm>"
+        return 
+    
         global codebase_retriever
 
         if verbose:
@@ -156,11 +164,12 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
 
         # Generate an implementation plan
         start_time = time.time()
-        plan = plan_model(
-            PLAN_WRITING_PROMPT, 
-            [f"""Given the provided information and the objective, write a plan to complete it. 
-            Do not write any code. Objective: {objective} \n \n Information: {information}"""]
-        )
+        # plan = plan_model(
+        #     PLAN_WRITING_PROMPT, 
+        #     [f"""Given the provided information and the objective, write a plan to complete it. 
+        #     Do not write any code. Objective: {objective} \n \n Information: {information}"""]
+        # )
+        plan = ""
         end_time = time.time()
 
         if verbose:
@@ -194,7 +203,10 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         #     print("Finishing refinement in time: ", end_time - start_time)
 
         # Return a set of changes to the user
-        yield json.dumps({"changes": changes}) + "<sddlm>"
+        yield json.dumps({
+            "type": "changes",
+            "content": changes
+        }, indent=4) + "<sddlm>"
 
 @app.post("/process")
 def ask():

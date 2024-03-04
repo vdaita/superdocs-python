@@ -17,6 +17,25 @@ from io import StringIO
 
 from pathlib import Path
 
+
+def reformat_search_replace(json_obj):
+    changes = ""
+    for change in json_obj:
+        changes += f"""
+        <SDCHANGE>
+            <SDFILE>
+            {change["filepath"]}
+            </SDFILE>
+            <SDSEARCH>
+            {change["search"]}
+            </SDSEARCH>
+            <SDREPLACE>
+            {change["replace"]}
+            </SDREPLACE>
+        </SDCHANGE>
+        """
+    return changes
+
 def process_with_search_replace_blocks(model, directory, input_text):
     response = model(SEARCH_REPLACE_PROMPT, [input_text])
     blocks = extract_xml_tags(response, "block")
@@ -53,7 +72,7 @@ def process_with_search_replace_blocks(model, directory, input_text):
 def process_with_diffs(model, directory, input_text, verbose=True):
     response = model(DIFF_PROMPT, [input_text])
     diffs = extract_code_block_data(response, "diff")
-    changes = {}
+    changes = []
     for diff in diffs:
         if verbose:
             print(diff)
@@ -65,8 +84,12 @@ def process_with_diffs(model, directory, input_text, verbose=True):
             print("REPLACE:")
             print(hunk.replace_block)
 
-        changes.update(fuzzy_process_diff(directory, parsed_diff))
-    return changes
+        new_changes = fuzzy_process_diff(directory, parsed_diff)   
+        for change in new_changes:
+            if len(change["search"]) == 0 and len(change["replace"]) == 0:
+                continue
+            changes.append(change)
+    return reformat_search_replace(changes)
 
 def lines_to_chars(lines, mapping):
     new_text = []
@@ -78,6 +101,7 @@ def lines_to_chars(lines, mapping):
 
 def fuzzy_process_diff(directory, hunks):
     cached_files = {}
+    changes = []
     for hunk in hunks:
         filepath = find_closest_file(directory, hunk.filepath)
         contents = cached_files[filepath] if filepath in cached_files else open(os.path.join(directory, filepath)).read() 
@@ -91,9 +115,15 @@ def fuzzy_process_diff(directory, hunks):
         print("======REPLACE BLOCK======")
         print(hunk.replace_block)
 
+        changes.append({
+            "search": matched_search_block, 
+            "replace": hunk.replace_block,
+            "filepath": filepath
+        })
+
         contents = contents.replace(matched_search_block, hunk.replace_block)
         cached_files[filepath] = contents
-    return cached_files
+    return changes
 
 if __name__ == "__main__":
     directory = "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main"
