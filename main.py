@@ -56,14 +56,6 @@ def generate_multifile_response(directory, objective, snippets):
     pass
 
 def generate_response(directory, objective, snippets, verbose=True, use_vectorstore=True, user_input=False):
-        ## Testing code
-        changes = process_with_diffs(openai_model, directory, f"")
-        yield json.dumps({
-            "type": "changes",
-            "content": changes
-        }, indent=4) + "<sddlm>"
-        return 
-    
         global codebase_retriever
 
         if verbose:
