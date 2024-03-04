@@ -73,6 +73,7 @@ def process_with_diffs(model, directory, input_text, verbose=True):
     response = model(DIFF_PROMPT, [input_text])
     diffs = extract_code_block_data(response, "diff")
     changes = []
+    cached_files = {}
     for diff in diffs:
         if verbose:
             print(diff)
@@ -84,12 +85,13 @@ def process_with_diffs(model, directory, input_text, verbose=True):
             print("REPLACE:")
             print(hunk.replace_block)
 
-        new_changes = fuzzy_process_diff(directory, parsed_diff)   
+        new_changes, new_cached_files = fuzzy_process_diff(directory, parsed_diff)   
         for change in new_changes:
             if len(change["search"]) == 0 and len(change["replace"]) == 0:
                 continue
             changes.append(change)
-    return reformat_search_replace(changes)
+        cached_files.update(new_cached_files)
+    return reformat_search_replace(changes), cached_files
 
 def lines_to_chars(lines, mapping):
     new_text = []
@@ -123,7 +125,7 @@ def fuzzy_process_diff(directory, hunks):
 
         contents = contents.replace(matched_search_block, hunk.replace_block)
         cached_files[filepath] = contents
-    return changes
+    return changes, cached_files
 
 if __name__ == "__main__":
     directory = "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main"

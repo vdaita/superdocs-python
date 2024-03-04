@@ -15,6 +15,8 @@ Your third step is to identify, for each query, whether or not it will be an A o
 Do not write any code planning or coding suggestions under any circumstances.
 You can provide multiple queries at one go. Use minimal queries.
 
+Consider relevant libraries and other such tools that are already in use to make the solution as integratable as possible. 
+
 # Example conversation 1
 
 ## USER: Objective: Write a script that pulls images of buzzcuts from google images

@@ -87,7 +87,7 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
         print("Received initial snippets: ", snippets)
 
         start_time = time.time()
-        model_request = information_request_model(INFORMATION_RETRIEVAL_PROMPT,[f"Objective: {objective} \n \n Existing information {snippets}"])
+        model_request = openai_model(INFORMATION_RETRIEVAL_PROMPT,[f"Objective: {objective} \n \n Existing information {snippets}"])
         end_time = time.time()
 
         if verbose:
@@ -156,12 +156,11 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
 
         # Generate an implementation plan
         start_time = time.time()
-        # plan = plan_model(
-        #     PLAN_WRITING_PROMPT, 
-        #     [f"""Given the provided information and the objective, write a plan to complete it. 
-        #     Do not write any code. Objective: {objective} \n \n Information: {information}"""]
-        # )
-        plan = ""
+        plan = openai_model(
+            PLAN_WRITING_PROMPT, 
+            [f"""Given the provided information and the objective, write a plan to complete it. 
+            Do not write any code or any code examples. Objective: {objective} \n \n Information: {information}"""]
+        )
         end_time = time.time()
 
         if verbose:
@@ -179,7 +178,7 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
 
         start_time = time.time()
         # Generate diffs
-        changes = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
+        changes, cached_filepaths = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
         end_time = time.time()
 
         if verbose:
@@ -200,11 +199,27 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
             "content": changes
         }, indent=4) + "<sddlm>"
 
+        approved = "APPROVED"
+
+        if user_input:
+            print("Waiting for GUI response")
+            approved = wait_for_gui_response(time.time())
+
+        if approved == "APPROVED":
+            for filepath in cached_filepaths:
+                    full_filepath = directory + "/" + filepath
+                    file = open(full_filepath, "w+")
+                    file.write(cached_filepaths[filepath])
+                    file.close()
+                    print("Wrote to file: ", filepath)
+                    print(cached_filepaths[filepath])
+
+
 @app.post("/process")
 def ask():
     data = request.get_json()
     directory, objective, snippets = data["directory"], data["objective"], data["snippets"]
-    return app.response_class(stream_with_context(generate_response(directory, objective, snippets, user_input=True)))
+    return app.response_class(stream_with_context(generate_response(directory, objective, snippets, user_input=False)))
 
 @app.post("/send_response")
 def send_response():
