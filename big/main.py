@@ -178,7 +178,7 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
 
         start_time = time.time()
         # Generate diffs
-        changes, cached_filepaths = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
+        changes = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
         end_time = time.time()
 
         if verbose:
@@ -206,14 +206,11 @@ def generate_response(directory, objective, snippets, verbose=True, use_vectorst
             approved = wait_for_gui_response(time.time())
 
         if approved == "APPROVED":
-            for filepath in cached_filepaths:
-                    full_filepath = directory + "/" + filepath
-                    file = open(full_filepath, "w+")
-                    file.write(cached_filepaths[filepath])
-                    file.close()
-                    print("Wrote to file: ", filepath)
-                    print(cached_filepaths[filepath])
-
+            for change in changes:
+                full_filepath = directory + "/" + change["filepath"]
+                file = open(full_filepath, "w+")
+                file.write(change["replace"])
+                file.close()
 
 @app.post("/process")
 def ask():
