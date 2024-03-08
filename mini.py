@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 import os
 import string
 
+from multiprocessing import Pool
+
 load_dotenv(".env")
 
 @dataclass
@@ -50,11 +52,42 @@ def create_model(api_key, model_name, base_url="https://api.openai.com/v1", base
 
     return run_model
 
+# model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-0125-preview")
+model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-opus:beta", base_url="https://openrouter.ai/api/v1")
+
+EVALUATION_PROMPT = """
+A code bot made some changes to a codebase to achieve the specified goal. <ASSISTANT EDITS> tags indicate that you should pay special attention to those portions, as those were where edits were made.
+Evaluate the changes made with the following criteria and output in the desired manner. 
+
+You should evaluate the following criteria:
+1. Simplicity: are the changes as minimal and simple as possible? This should be a 1 to 10 value.
+2. Functionality: will the changes be functional in achieving the user's goal? This should be a 1 to 10 value.
+3. Integration: will the changes cause a compilation error or another basic error (for example, misplaced braces creating syntax errors)? This should be a 0 or 1 value.
+
+Finally, you should provide feedback about specific pitfalls and what could be done to solve them. Make your suggestions and minimal as possible so that it is easy to implement and so that new errors are not introduced.
+Format in the following manner: 
+
+USER: <some code snippet>
+ASSISTANT:
+<simplicity>5</simplicity>
+<functionality>8</functionality>
+<integration>1</integration>
+<feedback>
+Next steps:
+1. Don't use a separate variable to keep track of whether or not the variable should be a certain way - use the existing value. 
+2. Make sure that the contrast of the text is there when presenting against a certain background.
+3. When showing the modal, you used "&&" instead of "?" and that could cause some erros, fix that.
+</feedback>
+"""
+
 EXECUTE_PROMPT = """
 Act as an expert software developer.
 You are diligent and tireless!
 You NEVER leave comments describing code without implementing it!
 You always COMPLETELY IMPLEMENT the needed code!
+
+Rigorously think through, check for any potential bugs within the code, and then diligently fix them.
+
 Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
 Make sure you do not truncate for brevity.
@@ -63,6 +96,8 @@ If there are no changes that need to be made, return DONE.
 
 Take requests for changes to the supplied code.
 If the request is ambiguous, ask questions.
+
+First, before making your diff edits, write out a quick plan (without using code), describing the changes that you are going to make in the form of a step-by-step list.
 
 For each file that needs to be changed, write out the changes similar to a unified diff like `diff -U0` would produce. For example:
 
@@ -199,18 +234,9 @@ def find_best_match(query_code: str, original_code: str):
 
             score = fuzz.ratio(stripped_original, stripped_query)
 
-            # Weighting the first and last lines by 5x
-            score += 5*fuzz.ratio(original_lines[start_line], query_lines[0])
-            score += 5*fuzz.ratio(original_lines[end_line], query_lines[-1])
-
-            # if score > 100:
-            #     print(f"======SIMILARITY SCORE {score}======")
-            #     print(f"===SEARCH===")
-            #     print(snippet_from_query)
-            #     print("Stripped: ", stripped_query)
-            #     print("===MATCH===")
-            #     print(snippet_from_original)
-            #     print("Stripped: ", stripped_original)
+            # Weighting the first and last lines by 3x
+            score += 3*fuzz.ratio(original_lines[start_line], query_lines[0])
+            score += 3*fuzz.ratio(original_lines[end_line], query_lines[-1])
         
             if score > best_match.score:
                 best_match = Match(full_original_snippet, score)
@@ -274,66 +300,116 @@ def extract_code_block_data(md_text, language):
    code_blocks = re.findall(pattern, md_text, re.MULTILINE)
    return code_blocks
 
-def execute(goal, context, files, model): # TODO: make a class out of these.
-    output = model(EXECUTE_PROMPT, ["Objective: " + goal, "Context: " + context])
+def extract_xml_tags(text, tag):
+    pattern = r'<' + tag + '>(.*?)</' + tag + '>'
+    matches = re.findall(pattern, text, re.DOTALL)
+    return matches
 
-    diff_blocks = extract_code_block_data(output, "diff")
+def stringify_files(file_dictionary):
+        file_string = ""
+        for file in file_dictionary:
+            file_string += "Filepath: " + file + "\n ----- \n"
+            file_string += file_dictionary[file]
+        return file_string
 
-    sr_blocks = []
-    for block in diff_blocks:
-        sr_blocks += parse_diff(block)
+def evaluate_generation(goal, context, annotated_modified_files):
+    output = model(EVALUATION_PROMPT, ["Goal: " + goal, "Context: " + context, stringify_files(annotated_modified_files)])
+    simplicity = extract_xml_tags(output, "simplicity")
+    functionality = extract_xml_tags(output, "functionality")
+    integration = extract_xml_tags(output, "integration")
+    feedback = extract_xml_tags(output, "feedback")
     
-    original_files = {}
-    modified_files = {}
-    for block in sr_blocks:
-        match_filepath = find_closest_file(block.filepath, files)
-        if not(match_filepath in original_files):
-            print("Reading and setting: ", match_filepath, " out of ", files)
-            original_files[match_filepath] = open(match_filepath, "r").read()
-            modified_files[match_filepath] = original_files[match_filepath]
+    if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0 or len(feedback) == 0:
+        return -1
 
-    for block in sr_blocks:
-        if len(block.search_block.strip()) == 0 and len(block.replace_block.strip()) == 0:
-            continue
+    simplicity, functionality, integration, feedback = int(simplicity[0]), int(functionality[0]), int(integration[0]), feedback[0]
 
-        match_filepath = find_closest_file(block.filepath, files)
-        print("Trying to match file that's in: ", match_filepath)
-        best_match = find_best_match(block.search_block, original_files[match_filepath])
-        if best_match.score > 0.7:
-            modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, block.replace_block)
-            print("Making replacement: ")
-            print("=====SEARCH=====")
-            print(block.search_block)
-            print(f"=====MATCH with closeness {best_match.score}======")
-            print(best_match.block)
-            print("=====REPLACE=====")
-            print(block.replace_block)
-    
-    return modified_files
+    score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
+    print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
+    return score, feedback
 
-def chain_execute(goal, filepath, model):
-    for step_i in range(3):
-        contents = open(filepath, "r").read()
-        context = f"Filepath: {filepath} \n ----- \n {contents}"
-        plan = model(
-            "Generate a step-by-step plan that can be followed sequentially to make the desired code change or fix by the user. Ensure that you explicitly enumerate all the variables that need to be defined. Don't write any code yourself.",
-            [f"Objective: {goal}", f"Context: {context}"]
-        )
+class Executor: # Uses an objective, general context for information, and a bunch of current files as context
+    def __init__(self, goal, files, context):
+        self.goal = goal
+        self.context = context
+        self.files = files
 
-        context += "\nPlan: \n" + plan
+    def chain_execute(self):
+        initial_modifications = [self.execute() for _ in range(3)]
+        best_modifications = self.files
+        best_modifications_score = 0
+        best_modifications_feedback = ""
 
-        print("===== CONTEXT =====")
-        print(context)
+        for modification in initial_modifications:
+            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
+            print("Received modification: ")
+            print(stringify_files(modified_files))
+            print("=============")
+            print(stringify_files(annotated_modified_files))
+            score, feedback = evaluate_generation(self.goal, self.context, annotated_modified_files)
+            if score > best_modifications_score:
+                best_modifications_score = score
+                best_modifications_feedback = feedback
+                best_modifications = modified_files
 
-        modified_files = execute(goal, context, [filepath], model)
-        if len(modified_files) == 0:
-            break
-        for filepath in modified_files:
-            file = open(filepath, "w+")
-            file.write(modified_files[filepath])
-            print(f"REWRITING {filepath}")
-            print(modified_files[filepath])
+        # Second step of refining the answer
+        self.files = best_modifications
+        self.goal += f"Make sure to fix think through and fix all possible bugs and use the following feedback to improve your response. In your plan, ensure that every step is clearly specified. Change only what's necessary. Here is some additional feedback to help you: {best_modifications_feedback}"
+        
+        second_modifications_round = [self.execute() for _ in range(3)]
+        for modification in second_modifications_round:
+            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
+            print("Received modification: ")
+            print(stringify_files(modified_files))
+            print("=============")
+            print(stringify_files(annotated_modified_files))
+            score, feedback = evaluate_generation(self.goal, self.context, annotated_modified_files)
+            if score > best_modifications_score:
+                best_modifications_score = score
+                best_modifications_feedback = feedback
+                best_modifications = modified_files
+
+        for filepath in best_modifications:
+            file = open(filepath, "w")
+            file.write(best_modifications[filepath])
             file.close()
+
+
+    def execute(self):
+        output = model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context, "Files: " + stringify_files(self.files)])
+
+        diff_blocks = extract_code_block_data(output, "diff")
+
+        sr_blocks = []
+        for block in diff_blocks:
+            sr_blocks += parse_diff(block)
+        
+        original_files = self.files.copy()
+        modified_files = self.files.copy()
+        annotated_modified_files = self.files.copy() # Not going to be returned directly to the users, but is going to show the LLM which lines were modified. 
+
+        for block in sr_blocks:
+            if len(block.search_block.strip()) == 0 and len(block.replace_block.strip()) == 0:
+                continue
+
+            match_filepath = find_closest_file(block.filepath, list(self.files.keys()))
+            print("Trying to match file that's in: ", match_filepath)
+            best_match = find_best_match(block.search_block, original_files[match_filepath])
+            if best_match.score > 550:
+                modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, block.replace_block)
+
+                annotated_replace_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
+                annotated_modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, annotated_replace_block)
+
+                print("Making replacement: ")
+                print("=====SEARCH=====")
+                print(block.search_block)
+                print(f"=====MATCH with closeness {best_match.score}======")
+                print(best_match.block)
+                print("=====REPLACE=====")
+                print(block.replace_block)
+        
+        return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
 
 def test_matcher():
     filepath = "base_page.txt"
@@ -348,14 +424,13 @@ def test_matcher():
     print(match.score)
 
 def test():
-    model = create_model(
-            os.environ["OPENAI_API_KEY"],
-            "gpt-4-0125-preview"
-        )
-    
     filepath = "/Users/vijaydaita/Files/uiuc/rxassist/rxassist/src/app/main/page.tsx"
-    goal = "Now, change the Card into a Modal for when the quiz finishes."    
-    chain_execute(goal, filepath, model)
+    goal = "Now, change the Box into a Modal for when the quiz finishes, which will display a score and a button that reloads the page."  
+    files = {filepath: open(filepath, "r").read()}
+    print("Starting file: ")
+    print(stringify_files(files))
+    executor = Executor(goal, files, "")  
+    executor.chain_execute()
 
 if __name__ == "__main__":
     test()

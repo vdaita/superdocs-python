@@ -1,5 +1,6 @@
 test_diff.txt
 *.html
+*.txt
 
 # Editors
 .vscode/
