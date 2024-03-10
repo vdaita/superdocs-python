@@ -3,7 +3,6 @@ While being able to provide a UI is useful in making this more accessible, there
 This mini file will make iterating on things much quicker.
 """
 import re
-from dataclasses import dataclass
 
 from rapidfuzz import fuzz, distance
 from tqdm import tqdm

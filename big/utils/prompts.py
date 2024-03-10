@@ -1,142 +1,54 @@
-INFORMATION_RETRIEVAL_PROMPT = """
-You are a development assistant, responsible for finding and requesting information to solve the objective.
-From the provided query and existing context, you are responsible for determining what kind of further information should be gathered.
-To request further information, you can use the following four tags:
-A queries are for searching for content within the user's current codebase, such as asking for where specific method definitions are or where are specific pieces of code that complete certain functionality: <a>query</a>
-B queries use Google for retrieval external API documentation, tutorials for solving coding problems not within the database, consulting externally for errors, finding tools to use, etc.: <b>query</b>
-Add as much context, such as programming language or framework when making requests.
-Complete all the requests you think you need at one go.
-Think step-by-step.
+EVALUATION_PROMPT = """
+A code bot made some changes to a codebase to achieve the specified goal. <ASSISTANT EDITS> tags indicate that you should pay special attention to those portions, as those were where edits were made.
+Evaluate the changes made with the following criteria and output in the desired manner. 
 
-Your first step should be to identify all the relevant libraries that are being used by the program (such as UI libraries, networking libraries, etc.).
-Your second step is to identify the queries you want.
-Your third step is to identify, for each query, whether or not it will be an A or B query (state why).
+You should evaluate the following criteria:
+1. Simplicity: are the changes as minimal and simple as possible? This should be a 1 to 10 value.
+2. Functionality: will the changes be functional in achieving the user's goal? This should be a 1 to 10 value.
+3. Integration: will the changes cause a compilation error or another basic error (for example, misplaced braces creating syntax errors)? This should be a 0 or 1 value.
 
-Do not write any code planning or coding suggestions under any circumstances.
-You can provide multiple queries at one go. Use minimal queries.
+Finally, you should provide feedback about specific pitfalls and what could be done to solve them. Make your suggestions and minimal as possible so that it is easy to implement and so that new errors are not introduced.
+Format in the following manner: 
 
-Consider relevant libraries and other such tools that are already in use to make the solution as integratable as possible. 
-
-# Example conversation 1
-
-## USER: Objective: Write a script that pulls images of buzzcuts from google images
-Code: # Code written in Python or in a .py file...
-
-## ASSISTANT: <a>Python libraries for downloading google images</a> <a>Python script for downloading images from google</a>
-
-# Example conversation 2
-
-## USER: Objective: Find where in the code do I make network requests to the GitHub api
-## ASSISTANT: <b>network requests, GitHub</b>
+USER: <some code snippet>
+ASSISTANT:
+<simplicity>5</simplicity>
+<functionality>8</functionality>
+<integration>1</integration>
+<feedback>
+Next steps:
+1. Don't use a separate variable to keep track of whether or not the variable should be a certain way - use the existing value. 
+2. Make sure that the contrast of the text is there when presenting against a certain background.
+3. When showing the modal, you used "&&" instead of "?" and that could cause some errors, fix that.
+</feedback>
+<notes>
+- Make sure that you use the right character for the ternary operator '?'
+- Make sure there is compatibility for dark mode
+</notes>
 """
 
-PLAN_WRITING_PROMPT = """
-Given the following context and the user's objective, create a plan for modifying the codebase and running commands to solve the objective.
-Create a step-by-step plan to accomplish these objectives without writing any code. First, write an explanation of each chunk of code that needs to be edited.
-The plan executor can only: replace content in files and provide code instructions to the user. 
-Under each command, write subinstructions that break down the solution so that the code executor can write the code.
-Make your plan as concise as possible.
+REWRITE_PROMPT = """
 
-PLEASE DO NOT WRITE ANY CODE YOURSELF.
+""" # Should the rewriting be completed using just the previous plan?
 
-Let's think step by step.
-"""
-
-SEARCH_REPLACE_PROMPT = """
+EXECUTE_PROMPT = """
 Act as an expert software developer.
 You are diligent and tireless!
 You NEVER leave comments describing code without implementing it!
 You always COMPLETELY IMPLEMENT the needed code!
+
+Rigorously think through, check for any potential bugs within the code, and then diligently fix them.
+
 Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
 Make sure you do not truncate for brevity.
 
-Take requests for changes to the supplied code.
-If the request is ambiguous, ask questions.
-
-For each file that needs to be changed, write a series of search replace blocks.
-
-Please do not truncate code for brevity.
-
-# Example conversation 1
-
-## USER: Replace is_prime with a call to sympy
-
-## ASSISTANT: Ok, I will: 
-
-1. Add an imports of sympy.
-2. Remove the is_prime() function.
-3. Replace the existing call to is_prime() with a call to sympy.isprime().
-
-Here are the search-replace blocks for those changes:
-
-<blocks>
-<block>
-<filename>mathweb/flask/app.py</filename>
-<search>
-class MathWeb:
-</search>
-<replace>
-import sympy
-
-class MathWeb:
-</replace>
-</block>
-
-<block>
-<filename>mathweb/flask/app.py</filename>
-<search>
-def is_prime(x):
-    if x < 2:
-        return False
-    for i in range(2, int(math.sqrt(x)) + 1):
-        if x % i == 0:
-            return False
-    return True
-</search>
-<replace>
-</replace>
-</block>
-
-<block>
-<filename>mathweb/flask/app.py</filename>
-<search>
-@app.route('/prime/<int:n>')
-def nth_prime(n):
-    count = 0
-    num = 1
-    while count < n:
-        num += 1
-        if is_prime(num):
-            count += 1
-    return str(num)
-</search>
-<replace>
-@app.route('/prime/<int:n>')
-def nth_prime(n):
-    count = 0
-    num = 1
-    while count < n:
-        num += 1
-        if sympy.isprime(num):
-            count += 1
-    return str(num)
-</replace>
-</block>
-</blocks>
-"""
-
-DIFF_PROMPT = """
-Act as an expert software developer.
-You are diligent and tireless!
-You NEVER leave comments describing code without implementing it!
-You always COMPLETELY IMPLEMENT the needed code!
-Always use best practices when coding.
-Respect and use existing conventions, libraries, etc that are already present in the code base.
-Make sure you do not truncate for brevity.
+If there are no changes that need to be made, return DONE. 
 
 Take requests for changes to the supplied code.
 If the request is ambiguous, ask questions.
+
+First, before making your diff edits, write out a quick plan (without using code), describing the changes that you are going to make in the form of a step-by-step list.
 
 For each file that needs to be changed, write out the changes similar to a unified diff like `diff -U0` would produce. For example:
 
@@ -217,6 +129,8 @@ Skip any hunks that are entirely unchanging ` ` lines.
 Output hunks in whatever order makes the most sense.
 Hunks don't need to be in any particular order.
 
+Ensure that all variables are appropriately defined. 
+
 When editing a function, method, loop, etc use a hunk to replace the *entire* code block.
 Delete the entire existing version with `-` lines and then add a new, updated version with `+` lines.
 This will help you generate correct code and correct diffs.
@@ -231,40 +145,4 @@ You always COMPLETELY IMPLEMENT the needed code!
 Please do not truncate code for brevity.
 
 For each hunk in your diff, write at least 10 lines of original code to provide context.
-"""
-
-LLM_RERANKER_PROMPT = """
-Give a relevance score for each snippet ranging from 1-10 in solving the goal of the objective. Format your response in the form of a JSON array.
-For example, you will be given a list of snippets:
-
-Example instruction:
-Objective: Find something
-# Snippets: 
-
-Snippet 1: Text 1
-Snippet 2: Text 2
-...
-
-Example output:
-```json
-[
-    {
-        "snippet_id": 1,
-        "relevance": 10
-    }
-]
-```
-"""
-
-CODE_SPLIT_PROMPT = """
-Return a JSON list chunking the codebase into different sections. Reference other parts of the code when necessary. Output your response in the following format:
-```json
-[
-    {
-        "start": 0,
-        "end": 10,
-        "description": This code uses the XYZ API to do ABC and sends it over to DEF.
-    }
-]
-```
 """

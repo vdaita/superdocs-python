@@ -10,7 +10,7 @@ import os
 import time
 
 from utils.gpt_output_utils import extract_xml_tags
-from internal_retriever import CodebaseRetriever
+from big.retriever import CodebaseRetriever
 from external_retrieval import PerplexityExternalSearch
 from code_executor import process_with_search_replace_blocks, process_with_diffs
 from refinement import run_refinement_chain
