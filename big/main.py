@@ -9,15 +9,11 @@ import os
 
 import time
 
-from utils.gpt_output_utils import extract_xml_tags
-from big.retriever import CodebaseRetriever
-from external_retrieval import PerplexityExternalSearch
-from code_executor import process_with_search_replace_blocks, process_with_diffs
-from refinement import run_refinement_chain
-from utils.codebase import find_closest_file
-from utils.prompts import INFORMATION_RETRIEVAL_PROMPT, PLAN_WRITING_PROMPT
-from utils.model import create_model
-from condensers import NoneReranker
+from retriever import CodebaseRetriever
+from utils.prompts import INFORMATION_RETRIEVAL_PROMPT
+from utils.model import create_model, extract_code_block_data, extract_xml_tags
+from code_executor import Executor
+import code_executor 
 
 load_dotenv(".env")
 
@@ -27,21 +23,20 @@ logging.getLogger('flask_cors').level = logging.DEBUG
 
 response, most_recent_response_time = "", -1
 codebase_retriever = CodebaseRetriever("")
-external_retriever = PerplexityExternalSearch(os.environ["PERPLEXITY_API_KEY"])
 
 openai_model = create_model(
     os.environ["OPENAI_API_KEY"],
-    "gpt-4-0125-preview"
+    "gpt-3.5-turbo"
 )
 
 plan_model = create_model(
     os.environ["TOGETHER_API_KEY"],
-    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
     base_url="https://api.together.xyz"
 )
 information_request_model = create_model(
     os.environ["TOGETHER_API_KEY"],
-    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
     base_url="https://api.together.xyz"
 ) # Make this a decent information request model as well
 coding_model = create_model(
@@ -50,167 +45,11 @@ coding_model = create_model(
     base_url="https://api.together.xyz"
 )
 
-# plan_model, information_request_model, coding_model = openai_model, openai_model, openai_model
-
-def generate_multifile_response(directory, objective, snippets):
-    pass
-
-def generate_response(directory, objective, snippets, verbose=True, use_vectorstore=True, user_input=False):
-        global codebase_retriever
-
-        if verbose:
-            print("Received information: ", directory)
-            print("=====OBJECTIVE=====")
-            print(objective)
-            print("=====SNIPPETS=====")
-            print(snippets)
-        
-        yield json.dumps({
-            "type": "information",
-            "content": "Started processing information!"
-        }) + "<sddlm>"
-    
-        # Perform information retrieval
-        if not(codebase_retriever.directory) == directory:
-            codebase_retriever = CodebaseRetriever(directory, use_vectorstore=use_vectorstore)
-            codebase_retriever.load_all_documents()
-            yield json.dumps({
-                "type": "information",
-                "content": "Loading vectorstore search for your codebase."
-                }) + "<sddlm>"
-        else:
-            yield json.dumps({
-                "type": "information",
-                "content": "Existing codebase retriever works."
-                }) + "<sddlm>"
-            
-        print("Received initial snippets: ", snippets)
-
-        start_time = time.time()
-        model_request = openai_model(INFORMATION_RETRIEVAL_PROMPT,[f"Objective: {objective} \n \n Existing information {snippets}"])
-        end_time = time.time()
-
-        if verbose:
-            print("Performed Information Retrieval Request: ", (end_time - start_time))
-
-        information = snippets
-
-        SPLIT_TOKEN = "------"
-        
-        start_time = time.time()
-        for _ in range(0): # Setting a limit to 3 queries at the most. TODO: find a fix to the recursive problem eh
-            # With the queries, run the corresponding searches
-            external_queries = extract_xml_tags(model_request, "a")
-            internal_queries = extract_xml_tags(model_request, "b")
-            # file_read_queries = extract_xml_tags(model_request, "f")
-
-            if len(external_queries) > 4:
-                external_queries = external_queries[:4]
-            if len(internal_queries) > 4:
-                internal_queries = internal_queries[:4]
-
-            if verbose:
-                print("Processing information retrieval request with: ", model_request)
-                print(" External queries: ", json.dumps(external_queries, indent=4))
-                print(" Internal queries: ", json.dumps(internal_queries, indent=4))
-                # print(" File read queries: ", json.dumps(file_read_queries, indent=4))
-
-            for query in external_queries:
-                if verbose:
-                    print("Processing external query: ", query)
-                external_response = external_retriever.answer_question(query)
-                if verbose:
-                    print("Received response: ", external_response)
-                information += f"{SPLIT_TOKEN}\n# External Query: {query} \n {external_response}"
-
-            for query in internal_queries:
-                code_snippets = codebase_retriever.retrieve_documents(query, NoneReranker())
-                code_snippets_string = "\n".join(code_snippets)
-                information += f"{SPLIT_TOKEN}\n# Codebase Query: {query} \n {code_snippets_string}"
-            
-            # for query in file_read_queries:
-            #     accurate_file = find_closest_file(directory, query)
-            #     contents = open(accurate_file, "r").read()
-            #     information += f"\n# File Contents for: {query} \n ```\n{contents}\n```"
-
-            if len(external_queries) == 0 and len(internal_queries) == 0: # and len(file_read_queries) == 0:
-                break
-        end_time = time.time()
-
-        if verbose:
-            print("Performed all information retrieval requests: ", (end_time - start_time))
-
-        # Send back the documents and ask for feedback
-        yield json.dumps({
-            "type": "context",
-            "content": information
-        }, indent=4) + "<sddlm>"
-        
-        if user_input:
-            print("Waiting for GUI Response.")
-            new_information = wait_for_gui_response(time.time())
-            information = new_information
-
-        # (potentially) Rerun the information retrieval process
-        print("Reading information: ", str(information))
-
-        # Generate an implementation plan
-        start_time = time.time()
-        plan = openai_model(
-            PLAN_WRITING_PROMPT, 
-            [f"""Given the provided information and the objective, write a plan to complete it. 
-            Do not write any code or any code examples. Objective: {objective} \n \n Information: {information}"""]
-        )
-        end_time = time.time()
-
-        if verbose:
-            print("Generated plan in: ", (start_time - end_time))
-
-        # Get feedback
-        yield json.dumps({
-            "type": "plan",
-            "content": plan
-        }, indent=4) + "<sddlm>"
-
-        if user_input:
-            print("Waiting for GUI response")
-            plan = wait_for_gui_response(time.time())
-
-        start_time = time.time()
-        # Generate diffs
-        changes = process_with_diffs(openai_model, directory, f"Objective: {objective} \n \n Information: {information}")
-        end_time = time.time()
-
-        if verbose:
-            print("Processing initial diff: ", (end_time - start_time))
-            print("Initial changes: ", json.dumps(changes, indent=4))
-
-        # # Self-refine everything
-        # start_time = time.time()
-        # refined_changes = run_refinement_chain(directory, changes, objective, information, openai_model, process_with_diffs) # TODO: have the refinement chain work with the new version of the files as the original
-        # end_time = time.time()
-
-        # if verbose:
-        #     print("Finishing refinement in time: ", end_time - start_time)
-
-        # Return a set of changes to the user
-        yield json.dumps({
-            "type": "changes",
-            "content": changes
-        }, indent=4) + "<sddlm>"
-
-        approved = "APPROVED"
-
-        if user_input:
-            print("Waiting for GUI response")
-            approved = wait_for_gui_response(time.time())
-
-        if approved == "APPROVED":
-            for change in changes:
-                full_filepath = directory + "/" + change["filepath"]
-                file = open(full_filepath, "w+")
-                file.write(change["replace"])
-                file.close()
+perplexity_model = create_model(
+    os.environ["PERPLEXITY_API_KEY"],
+    "sonar-small-online",
+    base_url="https://api.perplexity.ai"
+)
 
 @app.post("/process")
 def ask():
@@ -234,34 +73,44 @@ def wait_for_gui_response(request_time):
         time.sleep(0.5)
     return response
 
-if __name__ == "__main__":
-    app.run(port=8125, debug=True)
-    
 # if __name__ == "__main__":
-#     directory = "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main"
-#     filepath = "/app/pages/quiz/page.tsx"
+#     app.run(port=8125, debug=True)
+    
+if __name__ == "__main__":
+    directory = "/Users/vijaydaita/Files/uiuc/rxassist/rxmind-nextjs-main"
+    filepath = "/app/pages/quiz/page.tsx"
+    goal = "When the quiz finishes, add a modal that allows the user to refresh the webpage and displays the score."
+    files = {filepath: open(directory + filepath, "r").read()}
+    codebase = CodebaseRetriever(directory)
+    codebase.load_all_documents()
 
-#     read_file = open(directory + filepath, "r")
-#     file_snippet = read_file.read()
-#     read_file.close()
+    information_request = openai_model(INFORMATION_RETRIEVAL_PROMPT, messages=[f"Objective: {goal}", f"Files: {code_executor.stringify_files(files)}"])
+    internal_requests = extract_xml_tags(information_request, "a")
+    external_requests = extract_xml_tags(information_request, "b")
 
-#     for value in generate_response(
-#             directory, 
-#             "In the main quiz page, add a modal for when the quiz is over that shows the score and allows you to retake the quiz.", 
-#             f"Filepath: {filepath} \n ```\n{file_snippet}\n```",
-#             use_vectorstore=False
-#         ):
-#         print(json.dumps(json.loads(value), indent=4))
-#         ret_object = json.loads(value)
-#         if "changes" in ret_object:
-#             for filepath in ret_object["changes"]: # For each file
-#                 print(f"# Filepath: {filepath}")
-#                 print(ret_object["changes"][filepath])
+    print("Internal requests:", internal_requests)
+    print("External requests:", external_requests)
+    
+    # Perform the relevant information request queries
 
-#             should_apply = input("Apply to rewrite? Send Y for yes. ")
-#             if should_apply.lower() == "y":
-#                 for filepath in ret_object["changes"]:
-#                     file = open(os.path.join(directory, filepath), "w")
-#                     file.write(ret_object["changes"][filepath])
-#                     file.close()
-    # app.run(port=8123, debug=True)
+    context = ""
+    for request in internal_requests:
+        retrieved = codebase.retrieve_documents(request)
+        retrieved_filename = [chunk.splitlines()[0].replace("Filepath: ", "").strip() for chunk in retrieved]
+
+        new_snippets = []
+
+        for index, retrieved in enumerate(retrieved):
+            if not(retrieved_filename[index] in files):
+                new_snippets.append(retrieved[0])
+        snippets = "\n".join(codebase.retrieve_documents(request))
+        context += f"# Snippets for query {request} \n {snippets}"
+        
+    for request in external_requests:
+        perplexity_response = perplexity_model("Write a concise summary that would be helpful for a software developer to implement a fix or feature.", [f"Query: {request}"])
+        context += f"# Answer for request {request} \n {perplexity_response}"
+
+    print("Context: ", context)
+
+    executor = Executor(goal, files, context, openai_model)
+    executor.chain_execute()

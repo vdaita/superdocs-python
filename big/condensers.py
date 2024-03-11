@@ -8,7 +8,7 @@ import tiktoken
 
 from ragatouille import RAGPretrainedModel
 from transformers import pipeline
-from utils.gpt_output_utils import extract_code_block_data
+from utils.model import extract_code_block_data
 from utils.prompts import LLM_RERANKER_PROMPT
 
 class NoneReranker():

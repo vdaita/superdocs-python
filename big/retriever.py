@@ -1,17 +1,19 @@
+from __future__ import annotations
+
 import os
+import subprocess
 import chromadb
 import time
 import re
 import uuid
 
 from rank_bm25 import BM25Okapi
-from gitignore import parse_gitignore
+from gitignore_parser import parse_gitignore
 
 # Chunker from tree-sitter
-from __future__ import annotations
 from dataclasses import dataclass, field
 from tree_sitter import Tree, Node
-from tree_sitter_languages import get_languages, get_parser
+from tree_sitter_languages import get_parser
 
 language_map = {
     "py": "python",
@@ -137,33 +139,25 @@ class CodebaseRetriever():
         self.splitter = splitter
         self.use_vectorstore = use_vectorstore
         self.collection = None
+        self.code_extensions = ["py", "js", "jsx", "tsx", "ts", "java", "go", "c", "cpp", "cc", "hpp", "rb"]
 
     def get_directory_files(self):
-        # Initialize an empty list to store relevant files
-        relevant_files = []
-
-        # Traverse the directory tree recursively
-        for root, dirs, files in os.walk(self.directory):
-            # Load the .gitignore file if it exists in the current directory
-            gitignore_path = os.path.join(root, '.gitignore')
-            if os.path.exists(gitignore_path):
-                # Parse the .gitignore file
-                gitignore_rules = parse_gitignore(gitignore_path)
-
-                # Filter out files that match the .gitignore rules
-                for file_name in files:
-                    file_path = os.path.join(root, file_name)
-                    if not gitignore_rules(file_path):
-                        relevant_files.append(file_path)
-            else:
-                # If .gitignore doesn't exist, consider all files as relevant
-                relevant_files.extend([os.path.join(root, file_name) for file_name in files])
-
+        """
+        Lists all the files in a directory that are not gitignored, including untracked files.
+        
+        Returns:
+        file_contents: the contenst of files to be considered
+        """
+        result = subprocess.run(f"cd {self.directory} && git ls-files --cached --others --exclude-standard", shell=True, check=True, text=True, capture_output=True)
+        relevant_files = result.stdout.splitlines()
+        print("Relevant files: ", relevant_files)
+        
         # Read content of relevant files
         file_contents = {}
         for file_path in relevant_files:
-            with open(file_path, 'r') as file:
-                file_contents[file_path] = file.read()
+            if file_path.split(".")[-1] in self.code_extensions:
+                with open(os.path.join(self.directory, file_path), 'r') as file:
+                    file_contents[file_path] = file.read()
 
         return file_contents
     
@@ -173,15 +167,19 @@ class CodebaseRetriever():
         for filepath in contents:
             extension = filepath.split(".")[-1]
             parser = get_parser(language_map[extension])
-            tree = parser.parse(contents["filepath"].encode())
-            chunks = chunker(tree, contents["filepath"])    
+            tree = parser.parse(contents[filepath].encode())
+            chunks = chunker(tree, contents[filepath])    
             final_chunks.extend(
-                [f"Filepath: {filepath} \n" + chunk.extract(contents) for chunk in chunks]
+                [{
+                    "content": f"Filepath: {filepath} \n" + chunk.extract_lines(contents[filepath]),
+                    "filename": filepath
+                } for chunk in chunks]
             )
         return final_chunks
 
     def load_all_documents(self):        
         chunks = self.generate_chunks()
+        print("Chunks of length: ", len(chunks))
 
         if self.use_vectorstore:
             # self.chroma_client.delete_collection(name="snippets")
@@ -195,7 +193,7 @@ class CodebaseRetriever():
         # BM25 Tokenizer
         tokenized_chunks = []
         for chunk in chunks:
-            tokenized_chunks.append(re.findall(r'\b\w+\b|(?=[A-Z])|_', chunk["content"]))
+            tokenized_chunks.append(chunk["content"])
         self.bm25 = BM25Okapi(tokenized_chunks)
         self.bm25_corpus = tokenized_chunks
 
@@ -203,16 +201,20 @@ class CodebaseRetriever():
         # TODO: Check which documents are outdated and then replace them:
         pass
 
-    def retrieve_documents(self, query, reranker, vectorstore_n=25, bm25_n=25, reranked_n=10):
+    def retrieve_documents(self, query, vectorstore_n=5, bm25_n=5):
         tokenized_query = re.findall(r'\b\w+\b|(?=[A-Z])|_', query)
         token_results = self.bm25.get_top_n(tokenized_query, self.bm25_corpus, n=bm25_n)
 
         if self.use_vectorstore:
             vectorstore_results = self.collection.query(query_texts=[query], n_results=vectorstore_n)
+            print(len(vectorstore_results))
+            print("Sample vectorstore result: ", vectorstore_results["documents"][0][0])
+            print(len(token_results))
+            print("Sample BM25 results: ", token_results[0])
             vectorstore_documents_list = [result for result in vectorstore_results["documents"][0]]
             combined = token_results + vectorstore_documents_list
-            return reranker.rerank(combined, query)
+            return combined
         
-        return reranker.rerank(token_results, query)
+        return token_results
 
 # TODO: write a test for the internal retriever

@@ -143,10 +143,22 @@ class Executor: # Uses an objective, general context for information, and a bunc
         feedback = extract_xml_tags(output, "feedback")
         notes = extract_xml_tags(output, "notes")
         
-        if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0 or len(feedback) == 0:
+        if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0:
             return -1
+        
+        
 
-        simplicity, functionality, integration, feedback = int(simplicity[0]), int(functionality[0]), int(integration[0]), feedback[0]
+        simplicity, functionality, integration = int(simplicity[0]), int(functionality[0]), int(integration[0])
+
+        if len(feedback) == 0:
+            feedback = ""
+        else:
+            feedback = feedback[0]
+
+        if len(notes) == 0:
+            notes = ""
+        else:
+            notes = notes[0]
 
         score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
         print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
@@ -157,35 +169,55 @@ class Executor: # Uses an objective, general context for information, and a bunc
         
         for result in range(3):
             generation = self.execute()
-            score, feedback, notes = self.evaluate_generation(self.goal, self.context, generation["annotated"])
+            evaluation = self.evaluate_generation(self.goal, self.context, generation["unannotated"])
+            if evaluation == -1:
+                continue
+            score, feedback, notes = evaluation
             self.notes += notes + "\n"
             initial_nodes.append(ExecutionNode(
-                changes=result,
+                changes=generation,
                 reward=score,
                 feedback=feedback,
                 children=[]
             ))
    
         mcts = MCTS(initial_nodes[0]) # implement the last two nodes as children of the first node. Rewards aren't exactly updated so this should be fine. 
-        mcts.add_children(0, initial_nodes[1])
-        mcts.add_children(0, initial_nodes[2])
+        mcts.add_child(0, initial_nodes[1])
+        mcts.add_child(0, initial_nodes[2])
 
         for _ in range(2):
-            best_node = mcts.find_best_node()
+            best_node, best_node_score = mcts.find_best_node()
+            print("SELECTED BEST NODE")
+            print(best_node)
             for _ in range(2):
-                expanded_generation = self.execute(alternative_files=best_node.changes["unannotated"])
-                score, feedback, notes = self.evaluate_generation(self.goal, self.context, expanded_generation["annotated"])
+                expanded_generation = self.execute(alternative_files=best_node.changes["unannotated"], additional_context=best_node.feedback)
+                evaluation = self.evaluate_generation(self.goal, self.context, expanded_generation["unannotated"])
+                if evaluation == -1:
+                    continue
+                score, feedback, notes = evaluation
+                mcts.add_child(best_node.id, 
+                    ExecutionNode(
+                        changes=expanded_generation,
+                        feedback=feedback,
+                        reward=score,
+                        children=[]
+                    )
+                )
 
-        for filepath in best_modifications:
+        final_node, final_score = mcts.find_best_node()
+
+        for filepath in final_node.changes["unannotated"]:
             file = open(filepath, "w")
-            file.write(best_modifications[filepath])
+            file.write(final_node.changes["unannotated"][filepath])
             file.close()
 
 
-    def execute(self, alternative_files=[]):
+    def execute(self, alternative_files=[], additional_context=""):
         if len(alternative_files) == 0:
             alternative_files = self.files
-        output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context, "Previous execution notes: " + self.notes, "Files: " + stringify_files(alternative_files)])
+        output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context + ("" if len(additional_context) == 0 else additional_context), "Previous execution notes: " + self.notes, "Files: " + stringify_files(alternative_files)])
+        print("==== RECEIVED EXECUTE RESPONSE ====")
+        print(output)
 
         diff_blocks = extract_code_block_data(output, "diff")
 
@@ -202,6 +234,10 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 continue
 
             match_filepath = find_closest_file(block.filepath, list(self.files.keys()))
+            
+            if len(match_filepath) == 0:
+                continue
+    
             if len(block.search_block.strip()) == 0:
                 print("Replacing file contents:")
                 modified_files[match_filepath] = block.replace_block
