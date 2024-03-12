@@ -12,7 +12,14 @@ from dotenv import load_dotenv
 import os
 import string
 
-from multiprocessing import Pool
+import asyncio 
+import aiohttp
+import ssl
+import certifi
+import time
+import json
+
+from multiprocess import Pool
 
 @dataclass
 class Match:
@@ -30,50 +37,103 @@ class SearchReplaceChange:
     search_block: str
     replace_block: str
 
-def create_model(api_key, model_name, base_url="https://api.openai.com/v1", base_temperature=0.1, base_max_tokens=2048): # I don't want to pass the model name in separately
+async def call_chatgpt_async(session, messages, model_name, key): # https://medium.com/@nitin_l/parallel-chatgpt-requests-from-python-6ab48cc2a610
+    payload = {
+        'model': model_name,
+        'messages': messages
+    }
+    try:
+        start_time = time.time()
+        async with session.post(
+            url='https://api.openai.com/v1/chat/completions',
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+            json=payload,
+            ssl=ssl.create_default_context(cafile=certifi.where())
+        ) as response:
+            response = await response.json()
+        if "error" in response:
+            print(f"OpenAI request failed with error {response['error']}")
+        end_time = time.time()
+        print("Time spent on request: ", (end_time - start_time))
+        return response['choices'][0]['message']['content']
+    except:
+        print("Request failed.")
+
+async def bulk_call(message_sets, model_name, api_key):
+    async with aiohttp.ClientSession() as session, asyncio.TaskGroup() as tg:
+        tasks = [tg.create_task(call_chatgpt_async(session, message_set, model_name, api_key)) for message_set in message_sets]
+        responses = await asyncio.gather(*tasks)
+    return responses
+
+def create_model(api_key, model_name, base_url="https://api.openai.com/v1", base_temperature=0.2, base_max_tokens=2048): # I don't want to pass the model name in separately
     model = OpenAI(
         api_key=api_key,
         base_url=base_url
     )
     def run_model(system_prompt, messages, temperature=base_temperature, max_tokens=base_max_tokens):
         print(len(system_prompt), len(messages))
-        response = model.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-            ] + [ {"role": "user", "content": message} for message in messages],
-            max_tokens=max_tokens,
-            temperature=temperature
-         )
-        return response.choices[0].message.content
+        if type(system_prompt) == list: # That means that multiple requests should be made
+            print("Bulk processing")
+            message_sets = []
+            for message_index in range(len(system_prompt)):
+                new_messages =[
+                        {"role": "system", "content": system_prompt[message_index]},
+                ] + [{"role": "user", "content": message} for message in messages[message_index]]
+                # print(json.dumps(new_messages, indent=4))
+                message_sets.append(new_messages)
+            results = asyncio.run(bulk_call(message_sets, model_name, api_key))
+            return results
+        else:
+            response = model.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                ] + [ {"role": "user", "content": message} for message in messages],
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            return response.choices[0].message.content
 
     return run_model
 
-# model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-0125-preview")
-model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-sonnet:beta", base_url="https://openrouter.ai/api/v1")
+large_model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-turbo-preview")
+model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo")
+# model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-sonnet:beta", base_url="https://openrouter.ai/api/v1")
+
+PLAN_PROMPT = """
+Generate a plan that could be implemented by a junior developer for solving the user's goal. 
+Be as specific as possible, especially with regards to imports and variable definitions. 
+Describe your changes with minimal code - only when necessary.
+Think step-by-step.
+"""
+
+PLAN_EVAL_PROMPT = """
+Evaluate the following plan in its effectiveness to solve the given goal and the ease of implementability by a junior developer. 
+Think step-by-step. Assign a single numerical score between 0 and 10 and enclose within <score></score>. 
+Enclose specific feedback on how to improve within <feedback> </feedback> tags.
+"""
 
 EVALUATION_PROMPT = """
-A code bot made some changes to a codebase to achieve the specified goal. <ASSISTANT EDITS> tags indicate that you should pay special attention to those portions, as those were where edits were made.
-Evaluate the changes made with the following criteria and output in the desired manner. 
+A code bot made some changes to a codebase to achieve the specified goal. You have to evaluate the file as a whole and try to identify any bugs or errors. There are likely to be bugs, so watch out.
 
-You should evaluate the following criteria:
-1. Simplicity: are the changes as minimal and simple as possible? This should be a 1 to 10 value.
-2. Functionality: will the changes be functional in achieving the user's goal? This should be a 1 to 10 value.
-3. Integration: will the changes cause a compilation error or another basic error (for example, misplaced braces creating syntax errors)? This should be a 0 or 1 value.
+First, you should give a score ranging from 1 to 10 based on how effectively the snippets implement or solve the objective and their ability to be integrated.
 
-Finally, you should provide feedback about specific pitfalls and what could be done to solve them. Make your suggestions and minimal as possible so that it is easy to implement and so that new errors are not introduced.
+Here is a description of each rating:
+1: This code would not compile and would throw errors if actually used, it does not implement any of the feature requested.
+3: Some steps were made towards properly implementing the steps but it is not completed.
+5: Some steps were made towards properly implementing the steps and it is about halfway completed.
+8: This code would compile properly and adequately satisfies the requirements listed.
+10: This code would compile and fully satisfies the requirements listed.
+
+Finally, you should provide feedback about specific pitfalls or errors that are in the code and what should be done to solve them. Make your suggestions and minimal as possible so that it is easy to implement and so that new errors are not introduced.
 Format in the following manner: 
 
-USER: <some code snippet>
+USER: <some code snippets, objective, etc.>
 ASSISTANT:
-<simplicity>5</simplicity>
-<functionality>8</functionality>
-<integration>1</integration>
+<score>your number here </score>
 <feedback>
-Next steps:
-1. Don't use a separate variable to keep track of whether or not the variable should be a certain way - use the existing value. 
-2. Make sure that the contrast of the text is there when presenting against a certain background.
-3. When showing the modal, you used "&&" instead of "?" and that could cause some erros, fix that.
+1. first point
+2. second point
 </feedback>
 """
 
@@ -311,18 +371,12 @@ def stringify_files(file_dictionary):
 
 def evaluate_generation(goal, context, annotated_modified_files):
     output = model(EVALUATION_PROMPT, ["Goal: " + goal, "Context: " + context, stringify_files(annotated_modified_files)])
-    simplicity = extract_xml_tags(output, "simplicity")
-    functionality = extract_xml_tags(output, "functionality")
-    integration = extract_xml_tags(output, "integration")
+    score = extract_xml_tags(output, "score")
     feedback = extract_xml_tags(output, "feedback")
-    
-    if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0 or len(feedback) == 0:
-        return -1
-
-    simplicity, functionality, integration, feedback = int(simplicity[0]), int(functionality[0]), int(integration[0]), feedback[0]
-
-    score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
-    print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
+    if len(score) == 0: # just assume the plan is mid
+        score = ["5"]
+    score, feedback = float(score[0]), feedback[0]
+    print("Scoring determination made: ", f"Overall: {score}", f"Feedback: {feedback}")
     return score, feedback
 
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
@@ -331,50 +385,67 @@ class Executor: # Uses an objective, general context for information, and a bunc
         self.context = context
         self.files = files
 
-    def chain_execute(self):
-        initial_modifications = [self.execute() for _ in range(3)]
-        best_modifications = self.files
-        best_modifications_score = 0
-        best_modifications_feedback = ""
+    def chain_execute(self):        
+        candidate_plan_context = f"# Goal \n {self.goal} \n ------ \n # Context \n {self.context} ------ \n # Files \n {stringify_files(self.files)}"
+        candidate_plans = large_model([PLAN_PROMPT]*3, [[candidate_plan_context]]*3)
 
-        for modification in initial_modifications:
-            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
-            print("Received modification: ")
-            print(stringify_files(modified_files))
-            print("=============")
-            print(stringify_files(annotated_modified_files))
-            score, feedback = evaluate_generation(self.goal, self.context, annotated_modified_files)
-            if score > best_modifications_score:
-                best_modifications_score = score
-                best_modifications_feedback = feedback
-                best_modifications = modified_files
+        best_plan = ""
+        best_plan_feedback = ""
+        best_plan_score = 0
+        print("==== PLANS ====")
 
-        # Second step of refining the answer
-        self.files = best_modifications
-        self.goal += f"Make sure to fix think through and fix all possible bugs and use the following feedback to improve your response. In your plan, ensure that every step is clearly specified. Change only what's necessary. Here is some additional feedback to help you: {best_modifications_feedback}"
+        candidate_plan_evaluation_requests = [[f"# Plan: \n {plan} \n ----- \n # Goal: \n {self.goal} \n ----- \n # Additional Context: \n {self.context} \n ----- \n  # Files: \n {stringify_files(self.files)}"] for plan in candidate_plans]
+        candidate_plan_evaluations = large_model([PLAN_EVAL_PROMPT]*3, candidate_plan_evaluation_requests)
+
+        for plan, plan_eval in zip(candidate_plans, candidate_plan_evaluations):
+            print(plan)
+            print("------------")
+            score = extract_xml_tags(plan_eval, "score")
+            feedback = extract_xml_tags(plan_eval, "feedback")
+            if len(score) == 0:
+                score = 5
+            else:
+                score = float(extract_xml_tags(plan_eval, "score")[0])
+
+            if len(feedback) == 0:
+                feedback = ""    
+            
+            if score > best_plan_score:
+                best_plan = plan
+                best_plan_score = score                
+                best_plan_feedback = feedback
+
+        print("Identified the best plan: ", best_plan)
+        print("Ways to improve on that plan: ", best_plan_feedback)
+        improved_plan = model("Based on the given plan, context, and additional feedback, generate an improved and expanded plan enclosed between <plan> and </plan>. Do not truncate instructions for brevity.", 
+                              [f"Plan: {plan}", f"Goal: {self.goal}", f"Feedback: {best_plan_feedback}", f"Context: {self.context}", f"Files: {stringify_files(self.files)}"])
+
+        print("Enhanced plan: ")
+        print(improved_plan)
+
         
-        second_modifications_round = [self.execute() for _ in range(3)]
-        for modification in second_modifications_round:
-            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
-            print("Received modification: ")
-            print(stringify_files(modified_files))
-            print("=============")
-            print(stringify_files(annotated_modified_files))
-            score, feedback = evaluate_generation(self.goal, self.context, annotated_modified_files)
-            if score > best_modifications_score:
-                best_modifications_score = score
-                best_modifications_feedback = feedback
-                best_modifications = modified_files
+        implementations = large_model([EXECUTE_PROMPT] * 3, [["# Plan: \n " + improved_plan, "# Context: \n " + self.context, "# Files: \n " + stringify_files(self.files)]] * 3) # need to make this plan execution simultaneous
+        implementations = [self.exec_apply_output(implementation) for implementation in implementations]
+        best_implementation = self.files
+        best_impl_feedback = ""
+        best_impl_score = 0
+        for implementation in implementations:
+            print("==== IMPLEMENTATION ====")
+            print(stringify_files(implementation["annotated"]))
+            impl_score, impl_feedback = evaluate_generation(self.goal, self.context, implementation["annotated"])
+            print(impl_score, impl_feedback)
+            if impl_score > best_impl_score:
+                best_impl_score = impl_score
+                best_implementation = implementation["unannotated"]
+                best_impl_feedback = impl_feedback
 
-        for filepath in best_modifications:
-            file = open(filepath, "w")
-            file.write(best_modifications[filepath])
-            file.close()
+        feedback_implementation = self.execute(plan=best_impl_feedback, files=best_implementation)
 
-
-    def execute(self):
-        output = model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context, "Files: " + stringify_files(self.files)])
-
+        print(stringify_files(feedback_implementation["unannotated"]))
+        
+        return feedback_implementation["unannotated"]
+        
+    def exec_apply_output(self, output):
         diff_blocks = extract_code_block_data(output, "diff")
 
         sr_blocks = []
@@ -408,6 +479,12 @@ class Executor: # Uses an objective, general context for information, and a bunc
         
         return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
 
+    def execute(self, plan="", files=None):
+        if not(files):
+            files = self.files
+        output = model(EXECUTE_PROMPT, ["# Plan: \n " + plan, "# Context: \n " + self.context, "# Files: \n " + stringify_files(files)])
+        return self.exec_apply_output(output)
+        
 def test_matcher():
     filepath = "base_page.txt"
     contents = open(filepath, "r").read()

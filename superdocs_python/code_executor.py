@@ -153,7 +153,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
         functionality = extract_xml_tags(output, "functionality")
         integration = extract_xml_tags(output, "integration")
         feedback = extract_xml_tags(output, "feedback")
-        notes = extract_xml_tags(output, "notes")
+        # notes = extract_xml_tags(output, "notes")
         
         if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0:
             return -1
@@ -165,72 +165,52 @@ class Executor: # Uses an objective, general context for information, and a bunc
         else:
             feedback = feedback[0]
 
-        if len(notes) == 0:
-            notes = ""
-        else:
-            notes = notes[0]
+        # if len(notes) == 0:
+        #     notes = ""
+        # else:
+        #     notes = notes[0]
 
         score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
-        if self.verbose:
-            print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
-        return score, feedback, notes
-
-    def generate_and_evaluate(self, additional_info):
-        generation = None
-        if additional_info == None:
-            generation = self.execute()
-        else:
-            generation = self.execute(alternative_files=additional_info["files"], additional_context=additional_info["context"])
-
-        evaluation = self.evaluate_generation(self.goal, self.context, generation["annotated"])
-        if evaluation == -1:
-            evaluation = self.evaluate_generation(self.goal, self.context, generation["annotated"])
-        if evaluation == -1:
-            return generation, 5, "", "" # generation with the unannotated and annotated changes, score, feedback, notes
-        score, feedback, notes = evaluation
-
-        return generation, score, feedback, notes
+        logger.info("Scoring determination made: " + f" Simplicity {simplicity} " + f" Functionality: {functionality} " + f" Integration: {integration}" + f" Overall: {score} " + f"Feedback: {feedback}")
+        return score, feedback
 
     def chain_execute(self):
-        initial_nodes = []
+        initial_modifications = [self.execute() for _ in range(3)]
+        best_modifications = self.files
 
-        pool = Pool()        
-        initial_results = [self.generate_and_evaluate(None) for _ in range(2)] # run the 2 initially, to make it shorter
-        # initial_results = pool.map(self.generate_and_evaluate, [None, None])
-        for generation, score, feedback, notes in initial_results:
-            self.notes += notes + "\n"
-            initial_nodes.append(ExecutionNode(
-                changes=generation,
-                reward=score,
-                feedback=feedback,
-                children=[]
-            ))
+        best_modifications_score = 0
+        best_modifications_feedback = ""
 
-        mcts = MCTS(initial_nodes[0]) # implement the last two nodes as children of the first node. Rewards aren't exactly updated so this should be fine. 
-        if len(initial_nodes) > 1:
-            for other_node in initial_nodes[1:]:
-                mcts.add_child(0, other_node)
+        for modification in initial_modifications:
+            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
+            logger.info("Received modification: ")
+            logger.info(stringify_files(modified_files))
+            logger.info("=============")
+            logger.info(stringify_files(annotated_modified_files))
+            score, feedback = self.evaluate_generation(self.goal, self.context, annotated_modified_files)
+            if score > best_modifications_score:
+                best_modifications_score = score
+                best_modifications_feedback = feedback
+                best_modifications = modified_files
 
-        for _ in range(1):
-            best_node, best_node_score = mcts.find_best_node()
-            logger.debug("SELECTED BEST NODE")
-            logger.debug(best_node.id)
-            additional_info = {"files": best_node.changes["unannotated"], "context": best_node.feedback}
-            subrun_results = [self.generate_and_evaluate(additional_info) for _ in range(1)]
-            # subrun_results = pool.map(self.generate_and_evaluate, [additional_info, additional_info])
-            for generation, score, feedback, notes in subrun_results:
-                self.notes += notes + "\n"
-                mcts.add_child(best_node.id,
-                    ExecutionNode(
-                        changes=generation,
-                        feedback=feedback,
-                        reward=score,
-                        children=[]
-                    )
-                )
+        # Second step of refining the answer
+        self.files = best_modifications
+        self.goal += f"Make sure to fix think through and fix all possible bugs and use the following feedback to improve your response. In your plan, ensure that every step is clearly specified. Change only what's necessary. Here is some additional feedback to help you: {best_modifications_feedback}"
+        
+        second_modifications_round = [self.execute() for _ in range(1)]
+        for modification in second_modifications_round:
+            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
+            logger.info("Received modification: ")
+            logger.info(stringify_files(modified_files))
+            logger.info("=============")
+            logger.info(stringify_files(annotated_modified_files))
+            score, feedback = self.evaluate_generation(self.goal, self.context, annotated_modified_files)
+            if score > best_modifications_score:
+                best_modifications_score = score
+                best_modifications_feedback = feedback
+                best_modifications = modified_files
 
-        final_node, final_score = mcts.find_best_node()
-        return final_node.changes
+        return best_modifications
 
     def execute(self, alternative_files=[], additional_context=""):
         if len(alternative_files) == 0:

@@ -104,19 +104,13 @@ def main(model_name: Annotated[Optional[str], typer.Argument()] = "gpt-3.5-turbo
             end_time = time.time()
             typer.echo(f"Completed in {end_time - start_time} seconds")
 
-            for filepath in modifications["annotated"]:
-                typer.echo(f"Filepath: {filepath}")
-                typer.echo(modifications["annotated"][filepath])
+            for filepath in modifications:
+                file = open(os.path.join(directory, filepath), "w")
+                file.write(modifications[filepath])
+                file.close()
 
-            save = typer.confirm("Do you want to save these changes?")
+            typer.echo("Completed changes!")
 
-            if save:
-                for filepath in modifications["unannotated"]:
-                    file = open(os.path.join(directory, filepath), "w")
-                    file.write(modifications["unannotated"][filepath])
-                    file.close()
-            else:
-                typer.echo("Not saving changes")
         elif "exit" in command:
             break
 
