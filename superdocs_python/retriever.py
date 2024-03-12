@@ -228,7 +228,7 @@ class SearchRetriever():
         self.model = model
     
     def search(self, query):
-        results = search(query, advanced=True)
+        results = list(search(query, advanced=True))
         urls = [result.url for result in results[:3]]
         content = ""
         for url in urls:

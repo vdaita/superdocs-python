@@ -33,8 +33,7 @@ Code: # Code written in Python or in a .py file...
 
 
 EVALUATION_PROMPT = """
-A code bot made some changes to a codebase to achieve the specified goal. You are looking at the newly modified file and need to evaluate the changes.
-Evaluate the changes made with the following criteria and output in the desired manner. 
+A code bot made some changes to a codebase to achieve the specified goal. You are looking at the newly modified file and need to evaluate whether or not the newly modified file successfully completed the objective.
 
 You should evaluate the following criteria:
 1. Simplicity: are the changes as minimal and simple as possible? This should be a 1 to 10 value.

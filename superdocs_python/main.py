@@ -1,3 +1,7 @@
+import logging
+logging.basicConfig(filename="superdocs.log", filemode="w", level=logging.DEBUG)
+logging.info("Logging from main.py")
+
 from dotenv import load_dotenv
 import os
 import typer
@@ -21,9 +25,14 @@ files = {}
 app = typer.Typer()
 
 @app.command("run")
-def main(directory: str, model_name: Annotated[Optional[str], typer.Argument()] = "gpt-3.5-turbo", api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None):
+def main(model_name: Annotated[Optional[str], typer.Argument()] = "gpt-3.5-turbo", api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None):
     global search_retriever, codebase, files, openai_model
 
+    logging.basicConfig(filename="superdocs.log", filemode="w", level=logging.DEBUG)
+    logging.info("Logging from main function")
+
+    directory = os.getcwd()
+    typer.echo(f"Current working directory: {directory}")
     codebase = CodebaseRetriever(directory)
     def extract_text_within_single_quotes(text):
         return re.findall(r"'(.*?)'", text)
@@ -42,28 +51,30 @@ def main(directory: str, model_name: Annotated[Optional[str], typer.Argument()] 
             add_files = typer.prompt("Copy filepaths (filenames that are within single-quotes will be considered, like from VSCode drag-and-drop): ")
             filenames = extract_text_within_single_quotes(add_files)
             new_filenames = []
-            for filename in filenames:
-                shortened_filename = filename.replace(directory, "")
+            for filepath in filenames:
+                shortened_filename = os.path.relpath(filepath, directory)
                 extracted_filenames.append(shortened_filename)
             extracted_filenames.extend(new_filenames)
             typer.echo("Finished adding new filenames to the list.")
         elif "run" in command.lower():
             files = {}
             for rel_filepath in extracted_filenames:
-                filepath = os.path.join(directory, rel_filepath)
+                logging.info("Current directory: " + directory)
+                logging.info("Loading file at path: " + os.path.join(directory, rel_filepath))
                 try:
-                    files[rel_filepath] = open(filepath, "r").read()
+                    files[rel_filepath] = open(os.path.join(directory, rel_filepath), "r").read()
                 except Exception:
-                    typer.echo("Error loading file: ", filepath)
+                    typer.echo(f"Error loading file: {rel_filepath}")
             
             goal = typer.prompt("What objective would you like to run?")
+            start_time = time.time()
 
             information_request = openai_model(INFORMATION_RETRIEVAL_PROMPT, messages=[f"Objective: {goal}", f"Files: {code_executor.stringify_files(files)}"])
-            internal_requests = extract_xml_tags(information_request, "a")
-            external_requests = extract_xml_tags(information_request, "b")
+            internal_requests = extract_xml_tags(information_request, "b")
+            external_requests = extract_xml_tags(information_request, "a")
 
-            typer.echo("Internal requests:", internal_requests)
-            typer.echo("External requests:", external_requests)
+            print("Internal requests:", internal_requests)
+            print("External requests:", external_requests)
 
 
             context = ""
@@ -90,8 +101,11 @@ def main(directory: str, model_name: Annotated[Optional[str], typer.Argument()] 
             
             typer.echo("MODIFICATIONS")
 
+            end_time = time.time()
+            typer.echo(f"Completed in {end_time - start_time} seconds")
+
             for filepath in modifications["annotated"]:
-                typer.echo("Filepath: ", filepath)
+                typer.echo(f"Filepath: {filepath}")
                 typer.echo(modifications["annotated"][filepath])
 
             save = typer.confirm("Do you want to save these changes?")
@@ -99,7 +113,7 @@ def main(directory: str, model_name: Annotated[Optional[str], typer.Argument()] 
             if save:
                 for filepath in modifications["unannotated"]:
                     file = open(os.path.join(directory, filepath), "w")
-                    file.write(modifications[filepath])
+                    file.write(modifications["unannotated"][filepath])
                     file.close()
             else:
                 typer.echo("Not saving changes")
