@@ -2,9 +2,14 @@ from thefuzz import fuzz
 import re
 from pathlib import Path
 from dataclasses import dataclass
-from utils.prompts import EXECUTE_PROMPT, EVALUATION_PROMPT
-from utils.model import extract_code_block_data, extract_xml_tags
-from utils.mcts import ExecutionNode, MCTS
+from .utils.prompts import EXECUTE_PROMPT, EVALUATION_PROMPT
+from .utils.model import extract_code_block_data, extract_xml_tags
+from .utils.mcts import ExecutionNode, MCTS
+from multiprocess import Pool
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Match:
@@ -127,11 +132,18 @@ def stringify_files(file_dictionary):
             file_string += file_dictionary[file]
         return file_string
 
+def outer_evaluate_generation():
+    pass
+
+def outer_execute():
+    pass
+
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
-    def __init__(self, goal, files, context, model):
+    def __init__(self, goal, files, context, model, verbose=False):
         self.goal = goal
         self.context = context
         self.model = model
+        self.verbose = verbose
         self.files = files
         self.notes = "## Notes from previous executions: \n"
 
@@ -143,49 +155,89 @@ class Executor: # Uses an objective, general context for information, and a bunc
         feedback = extract_xml_tags(output, "feedback")
         notes = extract_xml_tags(output, "notes")
         
-        if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0 or len(feedback) == 0:
+        if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0:
             return -1
 
-        simplicity, functionality, integration, feedback = int(simplicity[0]), int(functionality[0]), int(integration[0]), feedback[0]
+        simplicity, functionality, integration = int(simplicity[0]), int(functionality[0]), int(integration[0])
+
+        if len(feedback) == 0:
+            feedback = ""
+        else:
+            feedback = feedback[0]
+
+        if len(notes) == 0:
+            notes = ""
+        else:
+            notes = notes[0]
 
         score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
-        print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
+        if self.verbose:
+            print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
         return score, feedback, notes
+
+    def generate_and_evaluate(self, additional_info):
+        generation = None
+        if additional_info == None:
+            generation = self.execute()
+        else:
+            generation = self.execute(alternative_files=additional_info["files"], additional_context=additional_info["context"])
+
+        evaluation = self.evaluate_generation(self.goal, self.context, generation["annotated"])
+        if evaluation == -1:
+            evaluation = self.evaluate_generation(self.goal, self.context, generation["annotated"])
+        if evaluation == -1:
+            return generation, 5, "", "" # generation with the unannotated and annotated changes, score, feedback, notes
+        score, feedback, notes = evaluation
+
+        return generation, score, feedback, notes
 
     def chain_execute(self):
         initial_nodes = []
-        
-        for result in range(3):
-            generation = self.execute()
-            score, feedback, notes = self.evaluate_generation(self.goal, self.context, generation["annotated"])
+
+        pool = Pool()        
+        initial_results = [self.generate_and_evaluate(None) for _ in range(2)] # run the 2 initially, to make it shorter
+        # initial_results = pool.map(self.generate_and_evaluate, [None, None])
+        for generation, score, feedback, notes in initial_results:
             self.notes += notes + "\n"
             initial_nodes.append(ExecutionNode(
-                changes=result,
+                changes=generation,
                 reward=score,
                 feedback=feedback,
                 children=[]
             ))
-   
+
         mcts = MCTS(initial_nodes[0]) # implement the last two nodes as children of the first node. Rewards aren't exactly updated so this should be fine. 
-        mcts.add_children(0, initial_nodes[1])
-        mcts.add_children(0, initial_nodes[2])
+        if len(initial_nodes) > 1:
+            for other_node in initial_nodes[1:]:
+                mcts.add_child(0, other_node)
 
-        for _ in range(2):
-            best_node = mcts.find_best_node()
-            for _ in range(2):
-                expanded_generation = self.execute(alternative_files=best_node.changes["unannotated"])
-                score, feedback, notes = self.evaluate_generation(self.goal, self.context, expanded_generation["annotated"])
+        for _ in range(1):
+            best_node, best_node_score = mcts.find_best_node()
+            logger.debug("SELECTED BEST NODE")
+            logger.debug(best_node.id)
+            additional_info = {"files": best_node.changes["unannotated"], "context": best_node.feedback}
+            subrun_results = [self.generate_and_evaluate(additional_info) for _ in range(1)]
+            # subrun_results = pool.map(self.generate_and_evaluate, [additional_info, additional_info])
+            for generation, score, feedback, notes in subrun_results:
+                self.notes += notes + "\n"
+                mcts.add_child(best_node.id,
+                    ExecutionNode(
+                        changes=generation,
+                        feedback=feedback,
+                        reward=score,
+                        children=[]
+                    )
+                )
 
-        for filepath in best_modifications:
-            file = open(filepath, "w")
-            file.write(best_modifications[filepath])
-            file.close()
+        final_node, final_score = mcts.find_best_node()
+        return final_node.changes
 
-
-    def execute(self, alternative_files=[]):
+    def execute(self, alternative_files=[], additional_context=""):
         if len(alternative_files) == 0:
             alternative_files = self.files
-        output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context, "Previous execution notes: " + self.notes, "Files: " + stringify_files(alternative_files)])
+        output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context + ("" if len(additional_context) == 0 else additional_context), "Previous execution notes: " + self.notes, "Files: " + stringify_files(alternative_files)])
+        logger.debug("==== RECEIVED EXECUTE RESPONSE ====")
+        logger.debug(output)
 
         diff_blocks = extract_code_block_data(output, "diff")
 
@@ -202,27 +254,36 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 continue
 
             match_filepath = find_closest_file(block.filepath, list(self.files.keys()))
+            
+            if len(match_filepath) == 0:
+                continue
+    
             if len(block.search_block.strip()) == 0:
-                print("Replacing file contents:")
+                if self.verbose:
+                    print("Replacing file contents:")
                 modified_files[match_filepath] = block.replace_block
                 annotated_write_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
                 annotated_modified_files[match_filepath] = annotated_write_block
             else:
-                print("Trying to match file that's in: ", match_filepath)
+                logger.debug("Trying to match file that's in: " + match_filepath)
                 best_match = find_best_match(block.search_block, original_files[match_filepath])
-                if best_match.score > 550:
+                if best_match.score > 500:
                     modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, block.replace_block)
 
-                    annotated_search_block = "\n".join(f"- {line}" for line in block.search_block.splitlines())
+                    annotated_search_block = "\n".join(f"- {line}" for line in best_match.block.splitlines())
                     annotated_replace_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
                     annotated_modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, annotated_search_block + "\n" + annotated_replace_block)
 
-                    print("Making replacement: ")
-                    print("=====SEARCH=====")
-                    print(block.search_block)
-                    print(f"=====MATCH with closeness {best_match.score}======")
-                    print(best_match.block)
-                    print("=====REPLACE=====")
-                    print(block.replace_block)
+                    
+                    logger.debug("Making replacement: ")
+                    logger.debug("=====SEARCH=====")
+                    logger.debug(block.search_block)
+                    logger.debug(f"=====MATCH with closeness {best_match.score}======")
+                    logger.debug(best_match.block)
+                    logger.debug("=====REPLACE=====")
+                    logger.debug(block.replace_block)
+                else:
+                    logger.debug("Failed to match")
+                    logger.debug(block.search_block)
         
         return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files

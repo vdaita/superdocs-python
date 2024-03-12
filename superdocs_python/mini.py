@@ -14,8 +14,6 @@ import string
 
 from multiprocessing import Pool
 
-load_dotenv(".env")
-
 @dataclass
 class Match:
     block: str
@@ -52,7 +50,7 @@ def create_model(api_key, model_name, base_url="https://api.openai.com/v1", base
     return run_model
 
 # model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-0125-preview")
-model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-opus:beta", base_url="https://openrouter.ai/api/v1")
+model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-sonnet:beta", base_url="https://openrouter.ai/api/v1")
 
 EVALUATION_PROMPT = """
 A code bot made some changes to a codebase to achieve the specified goal. <ASSISTANT EDITS> tags indicate that you should pay special attention to those portions, as those were where edits were made.
