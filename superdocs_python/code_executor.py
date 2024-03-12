@@ -2,9 +2,9 @@ from thefuzz import fuzz
 import re
 from pathlib import Path
 from dataclasses import dataclass
-from utils.prompts import EXECUTE_PROMPT, EVALUATION_PROMPT
-from utils.model import extract_code_block_data, extract_xml_tags
-from utils.mcts import ExecutionNode, MCTS
+from .utils.prompts import EXECUTE_PROMPT, EVALUATION_PROMPT
+from .utils.model import extract_code_block_data, extract_xml_tags
+from .utils.mcts import ExecutionNode, MCTS
 
 @dataclass
 class Match:
@@ -128,10 +128,11 @@ def stringify_files(file_dictionary):
         return file_string
 
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
-    def __init__(self, goal, files, context, model):
+    def __init__(self, goal, files, context, model, verbose=False):
         self.goal = goal
         self.context = context
         self.model = model
+        self.verbose = verbose
         self.files = files
         self.notes = "## Notes from previous executions: \n"
 
@@ -145,8 +146,6 @@ class Executor: # Uses an objective, general context for information, and a bunc
         
         if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0:
             return -1
-        
-        
 
         simplicity, functionality, integration = int(simplicity[0]), int(functionality[0]), int(integration[0])
 
@@ -161,7 +160,8 @@ class Executor: # Uses an objective, general context for information, and a bunc
             notes = notes[0]
 
         score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
-        print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
+        if self.verbose:
+            print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
         return score, feedback, notes
 
     def chain_execute(self):
@@ -187,8 +187,9 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
         for _ in range(2):
             best_node, best_node_score = mcts.find_best_node()
-            print("SELECTED BEST NODE")
-            print(best_node)
+            if self.verbose:
+                print("SELECTED BEST NODE")
+                print(best_node.id)
             for _ in range(2):
                 expanded_generation = self.execute(alternative_files=best_node.changes["unannotated"], additional_context=best_node.feedback)
                 evaluation = self.evaluate_generation(self.goal, self.context, expanded_generation["unannotated"])
@@ -205,19 +206,15 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 )
 
         final_node, final_score = mcts.find_best_node()
-
-        for filepath in final_node.changes["unannotated"]:
-            file = open(filepath, "w")
-            file.write(final_node.changes["unannotated"][filepath])
-            file.close()
-
+        return final_node.changes
 
     def execute(self, alternative_files=[], additional_context=""):
         if len(alternative_files) == 0:
             alternative_files = self.files
         output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context + ("" if len(additional_context) == 0 else additional_context), "Previous execution notes: " + self.notes, "Files: " + stringify_files(alternative_files)])
-        print("==== RECEIVED EXECUTE RESPONSE ====")
-        print(output)
+        if self.verbose:
+            print("==== RECEIVED EXECUTE RESPONSE ====")
+            print(output)
 
         diff_blocks = extract_code_block_data(output, "diff")
 
@@ -239,12 +236,14 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 continue
     
             if len(block.search_block.strip()) == 0:
-                print("Replacing file contents:")
+                if self.verbose:
+                    print("Replacing file contents:")
                 modified_files[match_filepath] = block.replace_block
                 annotated_write_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
                 annotated_modified_files[match_filepath] = annotated_write_block
             else:
-                print("Trying to match file that's in: ", match_filepath)
+                if self.verbose:
+                    print("Trying to match file that's in: ", match_filepath)
                 best_match = find_best_match(block.search_block, original_files[match_filepath])
                 if best_match.score > 550:
                     modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, block.replace_block)
@@ -252,13 +251,13 @@ class Executor: # Uses an objective, general context for information, and a bunc
                     annotated_search_block = "\n".join(f"- {line}" for line in block.search_block.splitlines())
                     annotated_replace_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
                     annotated_modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, annotated_search_block + "\n" + annotated_replace_block)
-
-                    print("Making replacement: ")
-                    print("=====SEARCH=====")
-                    print(block.search_block)
-                    print(f"=====MATCH with closeness {best_match.score}======")
-                    print(best_match.block)
-                    print("=====REPLACE=====")
-                    print(block.replace_block)
+                    if self.verbose:
+                        print("Making replacement: ")
+                        print("=====SEARCH=====")
+                        print(block.search_block)
+                        print(f"=====MATCH with closeness {best_match.score}======")
+                        print(best_match.block)
+                        print("=====REPLACE=====")
+                        print(block.replace_block)
         
         return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files

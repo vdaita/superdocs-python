@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "superdocs-python"
+version = "0.0.1"
+description = "LLM-generated code edits with solution search and dynamic information retrieval"
+authors = ["vdaita <vdaita@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.scripts]
+superdocs="superdocs_python.main:app"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+typer = "^0.9.0"
+thefuzz = "^0.22.1"
+openai = "^1.13.3"
+chromadb = "^0.4.24"
+gitignore-parser = "^0.1.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

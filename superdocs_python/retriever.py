@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from tree_sitter import Tree, Node
 from tree_sitter_languages import get_parser
 
+from trafilatura import fetch_url, extract
+from googlesearch import search
+
 language_map = {
     "py": "python",
     "js": "javascript",
@@ -202,6 +205,9 @@ class CodebaseRetriever():
         pass
 
     def retrieve_documents(self, query, vectorstore_n=5, bm25_n=5):
+        if not(self.collection):
+            return []
+
         tokenized_query = re.findall(r'\b\w+\b|(?=[A-Z])|_', query)
         token_results = self.bm25.get_top_n(tokenized_query, self.bm25_corpus, n=bm25_n)
 
@@ -217,4 +223,20 @@ class CodebaseRetriever():
         
         return token_results
 
+class SearchRetriever():
+    def __init__(self, model):
+        self.model = model
+    
+    def search(self, query):
+        results = search(query, advanced=True)
+        urls = [result.url for result in results[:3]]
+        content = ""
+        for url in urls:
+            downloaded = fetch_url(url)
+            extracted = extract(downloaded)
+            content += extracted + "\n-----\n"
+        
+        # estimating 10000 tokens = ~40k characters
+        content = content[:max(len(content), 40000)]
+        return self.model("Summarize the given documentation to provide the most relevant information for a developer looking to add new features or debug their app.", [content], max_tokens=1000)
 # TODO: write a test for the internal retriever
