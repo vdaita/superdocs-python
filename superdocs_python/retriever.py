@@ -234,7 +234,8 @@ class SearchRetriever():
         for url in urls:
             downloaded = fetch_url(url)
             extracted = extract(downloaded)
-            content += extracted + "\n-----\n"
+            if extracted:
+                content += extracted + "\n-----\n"
         
         # estimating 10000 tokens = ~40k characters
         content = content[:max(len(content), 40000)]

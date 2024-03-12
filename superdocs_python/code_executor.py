@@ -132,6 +132,12 @@ def stringify_files(file_dictionary):
             file_string += file_dictionary[file]
         return file_string
 
+def outer_evaluate_generation():
+    pass
+
+def outer_execute():
+    pass
+
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
     def __init__(self, goal, files, context, model, verbose=False):
         self.goal = goal
@@ -169,26 +175,28 @@ class Executor: # Uses an objective, general context for information, and a bunc
             print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
         return score, feedback, notes
 
+    def generate_and_evaluate(self, additional_info):
+        generation = None
+        if additional_info == None:
+            generation = self.execute()
+        else:
+            generation = self.execute(alternative_files=additional_info["files"], additional_context=additional_info["context"])
+
+        evaluation = self.evaluate_generation(self.goal, self.context, generation["annotated"])
+        if evaluation == -1:
+            evaluation = self.evaluate_generation(self.goal, self.context, generation["annotated"])
+        if evaluation == -1:
+            return generation, 5, "", "" # generation with the unannotated and annotated changes, score, feedback, notes
+        score, feedback, notes = evaluation
+
+        return generation, score, feedback, notes
+
     def chain_execute(self):
         initial_nodes = []
 
-        def generate_and_evaluate(additional_info):
-            generation = None
-            if additional_info == None:
-                generation = self.execute()
-            else:
-                generation = self.execute(alternative_files=additional_info["files"], additional_context=additional_info["context"])
-
-            evaluation = self.evaluate_generation(self.goal, self.context, generation["unannotated"])
-            if evaluation == -1:
-                evaluation = self.evaluate_generation(self.goal, self.context, generation["unannotated"])
-            if evaluation == -1:
-                return generation, 5, "", "" # generation with the unannotated and annotated changes, score, feedback, notes
-            score, feedback, notes = evaluation
-
-            return generation, score, feedback, notes
-        
-        initial_results = [generate_and_evaluate(None) for _ in range(2)] # run the 2 initially, to make it shorter
+        pool = Pool()        
+        initial_results = [self.generate_and_evaluate(None) for _ in range(2)] # run the 2 initially, to make it shorter
+        # initial_results = pool.map(self.generate_and_evaluate, [None, None])
         for generation, score, feedback, notes in initial_results:
             self.notes += notes + "\n"
             initial_nodes.append(ExecutionNode(
@@ -208,7 +216,8 @@ class Executor: # Uses an objective, general context for information, and a bunc
             logger.debug("SELECTED BEST NODE")
             logger.debug(best_node.id)
             additional_info = {"files": best_node.changes["unannotated"], "context": best_node.feedback}
-            subrun_results = [generate_and_evaluate(additional_info) for _ in range(2)]
+            subrun_results = [self.generate_and_evaluate(additional_info) for _ in range(1)]
+            # subrun_results = pool.map(self.generate_and_evaluate, [additional_info, additional_info])
             for generation, score, feedback, notes in subrun_results:
                 self.notes += notes + "\n"
                 mcts.add_child(best_node.id,
@@ -258,7 +267,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
             else:
                 logger.debug("Trying to match file that's in: " + match_filepath)
                 best_match = find_best_match(block.search_block, original_files[match_filepath])
-                if best_match.score > 550:
+                if best_match.score > 500:
                     modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, block.replace_block)
 
                     annotated_search_block = "\n".join(f"- {line}" for line in best_match.block.splitlines())
@@ -273,5 +282,8 @@ class Executor: # Uses an objective, general context for information, and a bunc
                     logger.debug(best_match.block)
                     logger.debug("=====REPLACE=====")
                     logger.debug(block.replace_block)
+                else:
+                    logger.debug("Failed to match")
+                    logger.debug(block.search_block)
         
         return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
