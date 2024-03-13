@@ -33,14 +33,13 @@ Code: # Code written in Python or in a .py file...
 
 
 EVALUATION_PROMPT = """
-A code bot made some changes to a codebase to achieve the specified goal. You are looking at the newly modified file and need to evaluate whether or not the newly modified file successfully completed the objective.
+A code bot made some changes to a codebase to achieve the specified goal. <ASSISTANT EDITS> tags indicate that you should pay special attention to those portions, as those were where edits were made.
+Evaluate the changes made with the following criteria and output in the desired manner. 
 
 You should evaluate the following criteria:
 1. Simplicity: are the changes as minimal and simple as possible? This should be a 1 to 10 value.
-2. Functionality: will the changes be functional in achieving the user's goal? This should be a 1 to 10 value.
-3. Integration: will the changes cause a compilation error or another basic error (for example, misplaced braces creating syntax errors)? This should be a 0 or 1 value.
-
-You need to critically evaluate the generated code.
+2. Functionality: will the changes be functional in achieving the user's objective? This should be a 1 to 10 value.
+3. Integration: will the changes cause a compilation error or another basic error? This should be a 1 to 10 value.
 
 Finally, you should provide feedback about specific pitfalls and what could be done to solve them. Make your suggestions and minimal as possible so that it is easy to implement and so that new errors are not introduced.
 Format in the following manner: 
@@ -49,17 +48,13 @@ USER: <some code snippet>
 ASSISTANT:
 <simplicity>5</simplicity>
 <functionality>8</functionality>
-<integration>1</integration>
+<integration>7</integration>
 <feedback>
 Next steps:
 1. Don't use a separate variable to keep track of whether or not the variable should be a certain way - use the existing value. 
 2. Make sure that the contrast of the text is there when presenting against a certain background.
-3. When showing the modal, you used "&&" instead of "?" and that could cause some errors, fix that.
+3. When showing the modal, you used "&&" instead of "?" and that could cause some erros, fix that.
 </feedback>
-<notes>
-- Make sure that you use the right character for the ternary operator '?'
-- Make sure there is compatibility for dark mode
-</notes>
 """
 
 REWRITE_PROMPT = """
@@ -84,6 +79,7 @@ Take requests for changes to the supplied code.
 If the request is ambiguous, ask questions.
 
 First, before making your diff edits, write out a quick plan (without using code), describing the changes that you are going to make in the form of a step-by-step list.
+Think step-by-step.
 
 For each file that needs to be changed, write out the changes similar to a unified diff like `diff -U0` would produce. For example:
 

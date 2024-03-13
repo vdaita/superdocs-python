@@ -96,9 +96,12 @@ def create_model(api_key, model_name, base_url="https://api.openai.com/v1", base
 
     return run_model
 
-large_model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-turbo-preview")
+# model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-turbo-preview")
 model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo")
 # model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-sonnet:beta", base_url="https://openrouter.ai/api/v1")
+
+# plan_model = create_model(os.environ["TOGETHER_API_KEY"], "deepseek-ai/deepseek-coder-33b-instruct", base_url="https://api.together.xyz/")
+
 
 PLAN_PROMPT = """
 Generate a plan that could be implemented by a junior developer for solving the user's goal. 
@@ -119,7 +122,7 @@ A code bot made some changes to a codebase to achieve the specified goal. You ha
 First, you should give a score ranging from 1 to 10 based on how effectively the snippets implement or solve the objective and their ability to be integrated.
 
 Here is a description of each rating:
-1: This code would not compile and would throw errors if actually used, it does not implement any of the feature requested.
+1: This code would not compile and would throw errors if actually used, it does not implement any of the feature requested. It actively removes functionality from the existing application.
 3: Some steps were made towards properly implementing the steps but it is not completed.
 5: Some steps were made towards properly implementing the steps and it is about halfway completed.
 8: This code would compile properly and adequately satisfies the requirements listed.
@@ -135,6 +138,186 @@ ASSISTANT:
 1. first point
 2. second point
 </feedback>
+"""
+
+EXECUTE_SEARCH_REPLACE = """
+Act as an expert software developer.
+You are diligent and tireless!
+You NEVER leave comments describing code without implementing it!
+You always COMPLETELY IMPLEMENT the needed code!
+Always use best practices when coding.
+Respect and use existing conventions, libraries, etc that are already present in the code base.
+
+Take requests for changes to the supplied code.
+If the request is ambiguous, ask questions.
+
+Once you understand the request you MUST:
+1. List the files you need to modify. Only suggest changes to a *read-write* files. Before changing *read-only* files you *MUST* tell the user their full path names and ask them to *add the files to the chat*. End your reply and wait for their approval.
+2. Think step-by-step and explain the needed changes with a numbered list of short sentences.
+3. Describe each change with a *SEARCH/REPLACE block* per the examples below.
+
+All changes to files must use this *SEARCH/REPLACE block* format.
+
+# Example conversation 1:
+
+## USER: These are the *read-write* files:
+
+mathweb/flask/app.py
+{fence[0]}python
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/div/<int:n>/<int:d>')
+def divide(n, d):
+    if d == 0:
+        return 'Error: Division by zero'
+    else:
+        result = n / d
+        return str(result)
+
+def factorial(n):
+    "compute factorial"
+
+    if n == 0:
+        return 1
+    else:
+        return n * factorial(n-1)
+
+@app.route('/factorial/<int:n>')
+def get_factorial(n):
+    return str(factorial(n))
+
+if __name__ == '__main__':
+    print("Starting...")
+    app.run()
+{fence[1]}
+
+## ASSISTANT: Ok.
+
+## USER: Change get_factorial() to use math.factorial
+
+## ASSISTANT:
+
+Do make this change we need to modify `mathweb/flask/app.py` to:
+
+1. Import the math package.
+2. Remove the existing factorial() function.
+3. Update get_factorial() to call math.factorial instead.
+
+Here are the *SEARCH/REPLACE* blocks:
+
+mathweb/flask/app.py
+{fence[0]}python
+<<<<<<< SEARCH
+from flask import Flask
+=======
+import math
+from flask import Flask
+>>>>>>> REPLACE
+{fence[1]}
+
+mathweb/flask/app.py
+{fence[0]}python
+<<<<<<< SEARCH
+def factorial(n):
+    "compute factorial"
+
+    if n == 0:
+        return 1
+    else:
+        return n * factorial(n-1)
+
+=======
+>>>>>>> REPLACE
+{fence[1]}
+
+mathweb/flask/app.py
+{fence[0]}python
+<<<<<<< SEARCH
+    return str(factorial(n))
+=======
+    return str(math.factorial(n))
+>>>>>>> REPLACE
+{fence[1]}
+
+# Example conversation 2:
+
+## USER: 
+# Goal: Refactor hello() into its own file.
+# Files:
+
+Filepath: main.py
+{fence[0]}python
+def hello():
+    "print a greeting"
+
+    print("hello")
+
+if __name__ == '__main__':
+    hello()
+{fence[1]}
+
+## ASSISTANT:
+
+Do make this change we need to modify `main.py` and make a new file `hello.py`:
+
+1. Make a new hello.py file with hello() in it.
+2. Remove hello() from main.py and replace it with an import.
+
+Here are the *SEARCH/REPLACE* blocks:
+
+hello.py
+{fence[0]}python
+<<<<<<< SEARCH
+=======
+def hello():
+    "print a greeting"
+
+    print("hello")
+>>>>>>> REPLACE
+{fence[1]}
+
+main.py
+{fence[0]}python
+<<<<<<< SEARCH
+def hello():
+    "print a greeting"
+
+    print("hello")
+=======
+from hello import hello
+>>>>>>> REPLACE
+{fence[1]}
+
+# Rules
+
+Every *SEARCH/REPLACE block* must use this format:
+1. The file path alone on a line, eg: main.py
+2. The opening fence and code language, eg: {fence[0]}python
+3. The start of search block: <<<<<<< SEARCH
+4. A contiguous chunk of lines to search for in the existing source code
+5. The dividing line: =======
+6. The lines to replace into the source code
+7. The end of the replace block: >>>>>>> REPLACE
+8. The closing fence: {fence[1]}
+
+Every *SEARCH* section must *EXACTLY MATCH* the existing source code, character for character, including all comments, docstrings, etc.
+
+Include *ALL* the code being searched and replaced!
+
+Only *SEARCH/REPLACE* files that are *read-write*.
+
+To move code within a file, use 2 *SEARCH/REPLACE* blocks: 1 to delete it from its current location, 1 to insert it in the new location.
+
+If you want to put code in a new file, use a *SEARCH/REPLACE block* with:
+- A new file path, including dir name if needed
+- An empty `SEARCH` section
+- The new file's contents in the `REPLACE` section
+
+You are diligent and tireless!
+You NEVER leave comments describing code without implementing it!
+You always COMPLETELY IMPLEMENT the needed code!
 """
 
 EXECUTE_PROMPT = """
@@ -384,69 +567,64 @@ class Executor: # Uses an objective, general context for information, and a bunc
         self.goal = goal
         self.context = context
         self.files = files
+    
+    def chain_execute(self):
+        previous_instruction = ""
+        previous_comments = ""
 
-    def chain_execute(self):        
-        candidate_plan_context = f"# Goal \n {self.goal} \n ------ \n # Context \n {self.context} ------ \n # Files \n {stringify_files(self.files)}"
-        candidate_plans = large_model([PLAN_PROMPT]*3, [[candidate_plan_context]]*3)
+        for _ in range(2):
+            new_goal = model("""Rewrite the following goal, given the context, to be more specific and actionable for a developer agent. 
+                             Don't write a comprehensive plan or code, but make specific references to concepts (variables, conditionals, UI elements) within the code if needed.
+                             Rewrite the goal portion, and the goal only.""",
+                             [f"# Goal \n {self.goal} \n ------ # Context \n {self.context} \n ------ # Files \n {stringify_files(self.files)}"])
+            print("New goal")
+            print(new_goal)
+            self.goal = new_goal
 
-        best_plan = ""
-        best_plan_feedback = ""
-        best_plan_score = 0
-        print("==== PLANS ====")
-
-        candidate_plan_evaluation_requests = [[f"# Plan: \n {plan} \n ----- \n # Goal: \n {self.goal} \n ----- \n # Additional Context: \n {self.context} \n ----- \n  # Files: \n {stringify_files(self.files)}"] for plan in candidate_plans]
-        candidate_plan_evaluations = large_model([PLAN_EVAL_PROMPT]*3, candidate_plan_evaluation_requests)
-
-        for plan, plan_eval in zip(candidate_plans, candidate_plan_evaluations):
-            print(plan)
-            print("------------")
-            score = extract_xml_tags(plan_eval, "score")
-            feedback = extract_xml_tags(plan_eval, "feedback")
-            if len(score) == 0:
-                score = 5
-            else:
-                score = float(extract_xml_tags(plan_eval, "score")[0])
-
-            if len(feedback) == 0:
-                feedback = ""    
-            
-            if score > best_plan_score:
-                best_plan = plan
-                best_plan_score = score                
-                best_plan_feedback = feedback
-
-        print("Identified the best plan: ", best_plan)
-        print("Ways to improve on that plan: ", best_plan_feedback)
-        improved_plan = model("Based on the given plan, context, and additional feedback, generate an improved and expanded plan enclosed between <plan> and </plan>. Do not truncate instructions for brevity.", 
-                              [f"Plan: {plan}", f"Goal: {self.goal}", f"Feedback: {best_plan_feedback}", f"Context: {self.context}", f"Files: {stringify_files(self.files)}"])
-
-        print("Enhanced plan: ")
-        print(improved_plan)
-
+        next_step = model("""You are the senior developer. Your junior developer can't test the application themself.
+                            Given the files and context, provide an extremely detailed plan of code changes to be performed to your junior developer on ensure the goal is completed accurately.
+                            If the change is accurately completed, don't suggest any further changes or optimizations of any form.
+                            Make your instructions as simple to implement as possible, so that a beginner programmer can implement it.   
+                            """, 
+                              [f"# Goal \n {self.goal} \n ------ # Context \n {self.context}" + "\n ------ \n " + f"# Files \n {stringify_files(self.files)} "])
+        print("STARTING INIITAL PLAN")
+        print(next_step)
         
-        implementations = large_model([EXECUTE_PROMPT] * 3, [["# Plan: \n " + improved_plan, "# Context: \n " + self.context, "# Files: \n " + stringify_files(self.files)]] * 3) # need to make this plan execution simultaneous
-        implementations = [self.exec_apply_output(implementation) for implementation in implementations]
-        best_implementation = self.files
-        best_impl_feedback = ""
-        best_impl_score = 0
-        for implementation in implementations:
-            print("==== IMPLEMENTATION ====")
-            print(stringify_files(implementation["annotated"]))
-            impl_score, impl_feedback = evaluate_generation(self.goal, self.context, implementation["annotated"])
-            print(impl_score, impl_feedback)
-            if impl_score > best_impl_score:
-                best_impl_score = impl_score
-                best_implementation = implementation["unannotated"]
-                best_impl_feedback = impl_feedback
+        for _ in range(2):
+            next_step = model("""You are the senior developer. Your junior developer can't test the application themself.
+                            Make your instructions as simple to implement as possible, so that a beginner programmer can implement it.   
+                            Edit the initial plan you wrote to make it simpler and less error-prone.
+                            """, 
+                              [f"# Initial plan \n {next_step}", f"# Goal \n {self.goal} \n ------ # Context \n {self.context}" + "\n ------ \n " + f"# Files \n {stringify_files(self.files)} "])
+            print("REVISED INITIAL PLAN")
+            print(next_step)
 
-        feedback_implementation = self.execute(plan=best_impl_feedback, files=best_implementation)
+        for i in range(2):
+            execution = model(EXECUTE_PROMPT, [f"Your next steps for implementation: {next_step}", f"# Context \n {self.context} \n ------ # Files \n {stringify_files(self.files)}"])
+            print("DIRECT EXECUTION OUTPUT")
+            print(execution)
+            previous_comments = re.sub(r'```diff.*?```', '', execution, flags=re.DOTALL).strip()
+            execution = self.apply_diff_output(execution)
+            self.files = execution["unannotated"]
 
-        print(stringify_files(feedback_implementation["unannotated"]))
-        
-        return feedback_implementation["unannotated"]
-        
-    def exec_apply_output(self, output):
+            print(stringify_files(self.files))
+
+            if i < 1:
+                next_step = model("""You are the senior developer. Your junior developer can't test the application themself.
+                    Given the files and context, provide an extremely detailed plan of code changes to be performed to your junior developer on ensure the goal is completed accurately.
+                    Make your instructions as simple to implement as possible, so that a beginner programmer can implement it.   
+                    Don't repeat an instruction if it is already implemented (but make sure to reword or elaborate on a previous instruction if required).                          
+                    """, 
+                        [f"# Goal \n {self.goal} \n ------ # Context \n {self.context}" + "" if len(previous_comments) == 0 else f"\n ------ \n # Comments from junior developer during previous round \n {previous_comments} + \n ------ \n " + f"# Files \n {stringify_files(self.files)} " 
+                        + "" if len(next_step) == 0 else f" \n ------ \n # Your previous instructions (so you can iterate on this) \n {next_step}"])
+                
+                print("NEXT STEP")
+                print(next_step)
+                
+
+    def apply_diff_output(self, output):
         diff_blocks = extract_code_block_data(output, "diff")
+        diff_blocks = ["\n".join(diff_blocks)]
 
         sr_blocks = []
         for block in diff_blocks:
@@ -476,15 +654,11 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 print(best_match.block)
                 print("=====REPLACE=====")
                 print(block.replace_block)
-        
-        return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
+            else:
+                print("Failed to match:")
+                print(block.search_block)
 
-    def execute(self, plan="", files=None):
-        if not(files):
-            files = self.files
-        output = model(EXECUTE_PROMPT, ["# Plan: \n " + plan, "# Context: \n " + self.context, "# Files: \n " + stringify_files(files)])
-        return self.exec_apply_output(output)
-        
+        return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
 def test_matcher():
     filepath = "base_page.txt"
     contents = open(filepath, "r").read()
@@ -499,7 +673,7 @@ def test_matcher():
 
 def test():
     filepath = "/Users/vijaydaita/Files/uiuc/rxassist/rxassist/src/app/main/page.tsx"
-    goal = "Now, change the Box into a Modal for when the quiz finishes, which will display a score and a button that reloads the page."  
+    goal = "Edit the file so that a modal appears when the quiz finishes. The modal should display the score and have a refresh button."  
     files = {filepath: open(filepath, "r").read()}
     print("Starting file: ")
     print(stringify_files(files))

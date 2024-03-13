@@ -139,83 +139,75 @@ def outer_execute():
     pass
 
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
-    def __init__(self, goal, files, context, model, verbose=False):
+    def __init__(self, goal, files, context, model, alt_model, verbose=False):
         self.goal = goal
         self.context = context
         self.model = model
+        self.alt_model = alt_model
         self.verbose = verbose
         self.files = files
         self.notes = "## Notes from previous executions: \n"
 
-    def evaluate_generation(self, goal, context, annotated_modified_files):
-        output = self.model(EVALUATION_PROMPT, ["Goal: " + goal, "Context: " + context, stringify_files(annotated_modified_files)])
+    def process_evaluations(self):
+        output = self.model(EVALUATION_PROMPT, ["Goal: " + self.goal, "Context: " + self.context, "Files: " + stringify_files(self.files)])
         simplicity = extract_xml_tags(output, "simplicity")
         functionality = extract_xml_tags(output, "functionality")
         integration = extract_xml_tags(output, "integration")
         feedback = extract_xml_tags(output, "feedback")
-        # notes = extract_xml_tags(output, "notes")
-        
-        if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0:
-            return -1
 
-        simplicity, functionality, integration = int(simplicity[0]), int(functionality[0]), int(integration[0])
+        if len(simplicity) == 0 or len(functionality) == 0 or len(integration) == 0 or len(feedback) == 0:
+            return -1, ""
 
-        if len(feedback) == 0:
-            feedback = ""
-        else:
-            feedback = feedback[0]
-
-        # if len(notes) == 0:
-        #     notes = ""
-        # else:
-        #     notes = notes[0]
+        simplicity, functionality, integration, feedback = int(simplicity[0]), int(functionality[0]), int(integration[0]), feedback[0]
 
         score = 10 * (((simplicity * 0.25 + functionality) * integration)/(10 * 0.25 + 10))
-        logger.info("Scoring determination made: " + f" Simplicity {simplicity} " + f" Functionality: {functionality} " + f" Integration: {integration}" + f" Overall: {score} " + f"Feedback: {feedback}")
+        print("Scoring determination made: ", f"Simplicity {simplicity}", f"Functionality: {functionality}", f"Integration: {integration}", f"Overall: {score}", f"Feedback: {feedback}")
         return score, feedback
+ 
+
+    def evaluate_generation(self, goal, context, annotated_modified_files):
+        output = self.model(EVALUATION_PROMPT, ["Goal: " + goal, "Context: " + context, stringify_files(annotated_modified_files)])
+        return self.process_evaluations(output)
 
     def chain_execute(self):
-        initial_modifications = [self.execute() for _ in range(3)]
+        initial_modifications = self.model([EXECUTE_PROMPT] * 3, 
+            [["Objective: " + self.goal, "Context: " + self.context, "Previous execution notes: " + self.notes, "Files: " + stringify_files(self.files)]] * 3)
+        initial_modifications = [self.process_execute_output(modification) for modification in initial_modifications]
         best_modifications = self.files
-
         best_modifications_score = 0
         best_modifications_feedback = ""
 
-        for modification in initial_modifications:
-            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
-            logger.info("Received modification: ")
-            logger.info(stringify_files(modified_files))
-            logger.info("=============")
-            logger.info(stringify_files(annotated_modified_files))
-            score, feedback = self.evaluate_generation(self.goal, self.context, annotated_modified_files)
+        initial_modifications_evals = self.model([EVALUATION_PROMPT]*3, 
+            [["Objectives: " + self.goal, "Context: " + self.context, "Files: " + stringify_files(modification["annotated"])] for modification in initial_modifications])
+        initial_modifications_evals = [self.process_evaluations(evaluation) for evaluation in initial_modifications_evals]
+
+        for modification, (score, feedback) in zip(initial_modifications, initial_modifications_evals):
             if score > best_modifications_score:
                 best_modifications_score = score
                 best_modifications_feedback = feedback
-                best_modifications = modified_files
+                best_modifications = modification["unannotated"]
 
         # Second step of refining the answer
         self.files = best_modifications
         self.goal += f"Make sure to fix think through and fix all possible bugs and use the following feedback to improve your response. In your plan, ensure that every step is clearly specified. Change only what's necessary. Here is some additional feedback to help you: {best_modifications_feedback}"
         
-        second_modifications_round = [self.execute() for _ in range(1)]
-        for modification in second_modifications_round:
-            modified_files, annotated_modified_files = modification["unannotated"], modification["annotated"]
-            logger.info("Received modification: ")
-            logger.info(stringify_files(modified_files))
-            logger.info("=============")
-            logger.info(stringify_files(annotated_modified_files))
-            score, feedback = self.evaluate_generation(self.goal, self.context, annotated_modified_files)
+        second_modifications_round = self.model([EXECUTE_PROMPT] * 3, 
+            [["Objective: " + self.goal, "Context: " + self.context, "Previous execution notes: " + self.notes, "Files: " + stringify_files(self.files)]] * 3)
+        second_modifications_round = [self.process_execute_output(modification) for modification in second_modifications_round]
+
+        second_modifications_evals = self.model([EVALUATION_PROMPT]*3, 
+            [["Objectives: " + self.goal, "Context: " + self.context, "Files: " + stringify_files(modification["annotated"])] for modification in second_modifications_round])
+        second_modifications_evals = [self.process_evaluations(evaluation) for evaluation in second_modifications_evals]
+        
+        for modification, (score, feedback) in zip(second_modifications_round, second_modifications_evals):
             if score > best_modifications_score:
                 best_modifications_score = score
                 best_modifications_feedback = feedback
-                best_modifications = modified_files
+                best_modifications = modification["unannotated"]
 
         return best_modifications
 
-    def execute(self, alternative_files=[], additional_context=""):
-        if len(alternative_files) == 0:
-            alternative_files = self.files
-        output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context + ("" if len(additional_context) == 0 else additional_context), "Previous execution notes: " + self.notes, "Files: " + stringify_files(alternative_files)])
+    def process_execute_output(self, output):
         logger.debug("==== RECEIVED EXECUTE RESPONSE ====")
         logger.debug(output)
 
@@ -267,3 +259,9 @@ class Executor: # Uses an objective, general context for information, and a bunc
                     logger.debug(block.search_block)
         
         return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
+
+    def execute(self, alternative_files=[], additional_context=""):
+        if len(alternative_files) == 0:
+            alternative_files = self.files
+        output = self.model(EXECUTE_PROMPT, ["Objective: " + self.goal, "Context: " + self.context, "Previous execution notes: " + self.notes, "Files: " + stringify_files(self.files)])
+        return self.process_execute_output(output)
