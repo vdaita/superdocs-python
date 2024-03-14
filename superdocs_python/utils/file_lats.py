@@ -182,7 +182,7 @@ class Reflection(BaseModel):
 class FileReflection(Reflection):
 
     reflections: str = Field(
-        description="Provide detailed feedback and next steps for fully completing and implementing the plan correctly while maintaining quality, effectiveness, correctness, and consistency."
+        description="Provide detailed feedback and next steps for fully completing and implementing each and every step of the plan correctly while maintaining quality, effectiveness, correctness, and consistency. Think step-by-step."
     )
 
     consistency: int = Field(
