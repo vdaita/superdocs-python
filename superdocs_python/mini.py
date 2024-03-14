@@ -19,6 +19,11 @@ import certifi
 import time
 import json
 
+from langchain_core.output_parsers import BaseOutputParser
+
+from utils.text_lats import LATS
+from utils.file_lats import FileLATS
+
 from multiprocess import Pool
 
 @dataclass
@@ -98,6 +103,7 @@ def create_model(api_key, model_name, base_url="https://api.openai.com/v1", base
 
 # model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-turbo-preview")
 model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo")
+lats = LATS(os.environ["OPENAI_API_KEY"])
 # model = create_model(os.environ["OPENROUTER_API_KEY"], "anthropic/claude-3-sonnet:beta", base_url="https://openrouter.ai/api/v1")
 
 # plan_model = create_model(os.environ["TOGETHER_API_KEY"], "deepseek-ai/deepseek-coder-33b-instruct", base_url="https://api.together.xyz/")
@@ -140,13 +146,14 @@ ASSISTANT:
 </feedback>
 """
 
-EXECUTE_SEARCH_REPLACE = """
+EXECUTE_PROMPT = """
 Act as an expert software developer.
 You are diligent and tireless!
 You NEVER leave comments describing code without implementing it!
 You always COMPLETELY IMPLEMENT the needed code!
 Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
+Do not truncate code for brevity.
 
 Take requests for changes to the supplied code.
 If the request is ambiguous, ask questions.
@@ -320,122 +327,6 @@ You NEVER leave comments describing code without implementing it!
 You always COMPLETELY IMPLEMENT the needed code!
 """
 
-EXECUTE_PROMPT = """
-Act as an expert software developer.
-You are diligent and tireless!
-You NEVER leave comments describing code without implementing it!
-You always COMPLETELY IMPLEMENT the needed code!
-
-Rigorously think through, check for any potential bugs within the code, and then diligently fix them.
-
-Always use best practices when coding.
-Respect and use existing conventions, libraries, etc that are already present in the code base.
-Make sure you do not truncate for brevity.
-
-If there are no changes that need to be made, return DONE. 
-
-Take requests for changes to the supplied code.
-If the request is ambiguous, ask questions.
-
-First, before making your diff edits, write out a quick plan (without using code), describing the changes that you are going to make in the form of a step-by-step list.
-
-For each file that needs to be changed, write out the changes similar to a unified diff like `diff -U0` would produce. For example:
-
-# Example conversation 1
-
-## USER: Replace is_prime with a call to sympy.
-
-## ASSISTANT: Ok, I will:
-
-1. Add an imports of sympy.
-2. Remove the is_prime() function.
-3. Replace the existing call to is_prime() with a call to sympy.isprime().
-
-Here are the diffs for those changes:
-
-```diff
---- mathweb/flask/app.py
-+++ mathweb/flask/app.py
-@@ ... @@
--class MathWeb:
-+import sympy
-+
-+class MathWeb:
-@@ ... @@
--def is_prime(x):
--    if x < 2:
--        return False
--    for i in range(2, int(math.sqrt(x)) + 1):
--        if x % i == 0:
--            return False
--    return True
-@@ ... @@
--@app.route('/prime/<int:n>')
--def nth_prime(n):
--    count = 0
--    num = 1
--    while count < n:
--        num += 1
--        if is_prime(num):
--            count += 1
--    return str(num)
-+@app.route('/prime/<int:n>')
-+def nth_prime(n):
-+    count = 0
-+    num = 1
-+    while count < n:
-+        num += 1
-+        if sympy.isprime(num):
-+            count += 1
-+    return str(num)
-```
-
-# File editing rules:
-
-Return edits similar to unified diffs that `diff -U0` would produce.
-
-Make sure you include the first 2 lines with the file paths.
-Don't include timestamps with the file paths.
-
-Include headers, top-level variable definitions, imports, etc.
-
-Start each hunk of changes with a `@@ ... @@` line.
-Don't include line numbers like `diff -U0` does.
-The user's patch tool doesn't need them.
-
-The user's patch tool needs CORRECT patches that apply cleanly against the current contents of the file!
-Think carefully and make sure you include and mark all lines that need to be removed or changed as `-` lines.
-Make sure you mark all new or modified lines with `+`.
-Don't leave out any lines or the diff patch won't apply correctly.
-
-Indentation matters in the diffs!
-
-Start a new hunk for each section of the file that needs changes.
-
-Only output hunks that specify changes with `+` or `-` lines.
-Skip any hunks that are entirely unchanging ` ` lines.
-
-Output hunks in whatever order makes the most sense.
-Hunks don't need to be in any particular order.
-
-Ensure that all variables are appropriately defined. 
-
-When editing a function, method, loop, etc use a hunk to replace the *entire* code block.
-Delete the entire existing version with `-` lines and then add a new, updated version with `+` lines.
-This will help you generate correct code and correct diffs.
-
-To move code within a file, use 2 hunks: 1 to delete it from its current location, 1 to insert it in the new location.
-
-To make a new file, show a diff from `--- /dev/null` to `+++ path/to/new/file.ext`.
-
-You are diligent and tireless!
-You NEVER leave comments describing code without implementing it!
-You always COMPLETELY IMPLEMENT the needed code!
-Please do not truncate code for brevity.
-
-For each hunk in your diff, write at least 10 lines of original code to provide context.
-"""
-
 def find_closest_file(filepath, all_filepaths):
     best_match = Match("", -1)
     for fp in all_filepaths:
@@ -482,57 +373,34 @@ def find_best_match(query_code: str, original_code: str):
                 best_match = Match(full_original_snippet, score)
     return best_match
 
-def find_hunks(diff_string):
-    hunks = []
-    current_filename = ""
-    current_lines = ""
-    for line in diff_string.splitlines():
-        if line.startswith("---"):
-            continue
-        elif line.lstrip().startswith("+++"):
-            if len(current_filename) > 0:
-                hunks.append(Hunk(current_filename, current_lines))
-            current_filename = line[3:]
-            current_lines = ""
-        elif line.lstrip().startswith("@@"):
-            if len(current_filename) > 0:
-                hunks.append(Hunk(current_filename, current_lines))
-            current_lines = ""
-        else:
-            current_lines += line
-            current_lines += "\n"
-    hunks.append(Hunk(current_filename, current_lines))
-    return hunks
+def stringify_files(file_dictionary):
+        file_string = ""
+        for file in file_dictionary:
+            file_string += "Filepath: " + file + "\n ----- \n"
+            ext = file.split(".")[-1]
+            file_string += f"```{ext} \n {file_dictionary[file]} \n ```"
+        return file_string
 
-def parse_diff(diff_string):
-    hunks = find_hunks(diff_string)
-    search_replace_blocks = []
+def parse_search_replace_blocks(text):
+    pattern = re.compile(r'''
+        <<<<<<< SEARCH ^(?P<filepath>[^\n]+) \n
+        (?P<search_block>.*?)
+        =======\n
+        (?P<replace_block>.*?)
+        >>>>>>> REPLACE\n
+    ''', re.MULTILINE | re.DOTALL | re.VERBOSE)
 
-    for hunk in hunks:
-        filepath = hunk.filepath
-        text = hunk.text
-
-        search_block = ""
-        replace_block = ""
-
-        for line in text.splitlines():
-            if line.startswith("-"):
-                search_block += " " + line[1:] + "\n"
-            elif line.startswith("+"):
-                replace_block += " " + line[1:] + "\n"
-            else:
-                search_block += line + "\n"
-                replace_block += line + "\n"
-        
-        search_replace_blocks.append(
-            SearchReplaceChange(filepath, search_block, replace_block)
+    blocks = []
+    for match in pattern.finditer(text):
+        blocks.append(
+            SearchReplaceChange(
+                filepath=match.group("filepath").strip(),
+                search_block=match.group("search_block").strip(),
+                replace_block=match.group("replace_block").strip()
+            )
         )
-    
-    search_replace_blocks.append(
-        SearchReplaceChange(filepath, search_block, replace_block)
-    )
 
-    return search_replace_blocks
+    return blocks
 
 def extract_code_block_data(md_text, language):
    # Regular expression pattern for matching diff code blocks
@@ -544,13 +412,6 @@ def extract_xml_tags(text, tag):
     pattern = r'<' + tag + '>(.*?)</' + tag + '>'
     matches = re.findall(pattern, text, re.DOTALL)
     return matches
-
-def stringify_files(file_dictionary):
-        file_string = ""
-        for file in file_dictionary:
-            file_string += "Filepath: " + file + "\n ----- \n"
-            file_string += file_dictionary[file]
-        return file_string
 
 def evaluate_generation(goal, context, annotated_modified_files):
     output = model(EVALUATION_PROMPT, ["Goal: " + goal, "Context: " + context, stringify_files(annotated_modified_files)])
@@ -574,61 +435,67 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
         for _ in range(2):
             new_goal = model("""Rewrite the following goal, given the context, to be more specific and actionable for a developer agent. 
-                             Don't write a comprehensive plan or code, but make specific references to concepts (variables, conditionals, UI elements) within the code if needed.
+                             Do not write code under any circumstance. Writing code will short-circuit the execution process. Make sure that no code is written whatsoever.
                              Rewrite the goal portion, and the goal only.""",
                              [f"# Goal \n {self.goal} \n ------ # Context \n {self.context} \n ------ # Files \n {stringify_files(self.files)}"])
             print("New goal")
             print(new_goal)
             self.goal = new_goal
 
-        next_step = model("""You are the senior developer. Your junior developer can't test the application themself.
+        plan = lats.run(f"""
+                            You are the senior developer. Your junior developer can't test the application themself.
                             Given the files and context, provide an extremely detailed plan of code changes to be performed to your junior developer on ensure the goal is completed accurately.
                             If the change is accurately completed, don't suggest any further changes or optimizations of any form.
-                            Make your instructions as simple to implement as possible, so that a beginner programmer can implement it.   
-                            """, 
-                              [f"# Goal \n {self.goal} \n ------ # Context \n {self.context}" + "\n ------ \n " + f"# Files \n {stringify_files(self.files)} "])
-        print("STARTING INIITAL PLAN")
-        print(next_step)
+                            Make your instructions as simple to implement as possible, so that a beginner programmer can implement it in a simple and error-prone way.  
+                            # Goal
+                            {self.goal} 
+                            ------
+                            # Context
+                            {self.context} 
+                            ------
+                            # Original Files
+                            {stringify_files(self.files)}
+                            """)
+        print("STARTING PLAN")
+        print(plan)
+
+        input_string = f"""# Follow the instructions in the plan and apply the changes to the files. \n {plan} \n # Goal: \n {self.goal}
+# Context:
+{self.context}
+# Original Files:
+{stringify_files(self.files)}
+        """
+
+        print(input_string)
+
+        file_lats = FileLATS(os.environ["OPENAI_API_KEY"], self.apply_diff_output_wholefile)
+        # file_lats = FileLATS(os.environ["OPENAI_API_KEY"], lambda x: x)
+        best_file = file_lats.run(input_string)
+
+        print(best_file)
+
+    def apply_diff_output_wholefile(self, output):
+        print(output)
+        pattern = r'(?s)(.*?)\n```(.*?)\n(.*?)\n```'
+        matches = re.findall(pattern, output)
+        triplets = [(match[0], match[1], match[2]) for match in matches]
+        new_files = {}
+        for triple in triplets:
+            new_files[triple[0]] = triple[2]
         
-        for _ in range(2):
-            next_step = model("""You are the senior developer. Your junior developer can't test the application themself.
-                            Make your instructions as simple to implement as possible, so that a beginner programmer can implement it.   
-                            Edit the initial plan you wrote to make it simpler and less error-prone.
-                            """, 
-                              [f"# Initial plan \n {next_step}", f"# Goal \n {self.goal} \n ------ # Context \n {self.context}" + "\n ------ \n " + f"# Files \n {stringify_files(self.files)} "])
-            print("REVISED INITIAL PLAN")
-            print(next_step)
 
-        for i in range(2):
-            execution = model(EXECUTE_PROMPT, [f"Your next steps for implementation: {next_step}", f"# Context \n {self.context} \n ------ # Files \n {stringify_files(self.files)}"])
-            print("DIRECT EXECUTION OUTPUT")
-            print(execution)
-            previous_comments = re.sub(r'```diff.*?```', '', execution, flags=re.DOTALL).strip()
-            execution = self.apply_diff_output(execution)
-            self.files = execution["unannotated"]
+        code_block_pattern = r'```.*?```'
+        without_code = re.sub(code_block_pattern, '', output, flags=re.DOTALL)
+        
+        return f"""Generated output: {without_code} \n \n {stringify_files(new_files)}"""
 
-            print(stringify_files(self.files))
-
-            if i < 1:
-                next_step = model("""You are the senior developer. Your junior developer can't test the application themself.
-                    Given the files and context, provide an extremely detailed plan of code changes to be performed to your junior developer on ensure the goal is completed accurately.
-                    Make your instructions as simple to implement as possible, so that a beginner programmer can implement it.   
-                    Don't repeat an instruction if it is already implemented (but make sure to reword or elaborate on a previous instruction if required).                          
-                    """, 
-                        [f"# Goal \n {self.goal} \n ------ # Context \n {self.context}" + "" if len(previous_comments) == 0 else f"\n ------ \n # Comments from junior developer during previous round \n {previous_comments} + \n ------ \n " + f"# Files \n {stringify_files(self.files)} " 
-                        + "" if len(next_step) == 0 else f" \n ------ \n # Your previous instructions (so you can iterate on this) \n {next_step}"])
-                
-                print("NEXT STEP")
-                print(next_step)
-                
 
     def apply_diff_output(self, output):
-        diff_blocks = extract_code_block_data(output, "diff")
-        diff_blocks = ["\n".join(diff_blocks)]
+        print(output)
+        sr_blocks = parse_search_replace_blocks(output)
 
-        sr_blocks = []
-        for block in diff_blocks:
-            sr_blocks += parse_diff(block)
+        code_block_pattern = r'```.*?```'
+        without_code = re.sub(code_block_pattern, '', output, flags=re.DOTALL)
         
         original_files = self.files.copy()
         modified_files = self.files.copy()
@@ -658,7 +525,12 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 print("Failed to match:")
                 print(block.search_block)
 
-        return {"unannotated": modified_files, "annotated": annotated_modified_files} # [0] are the actual modified files and [1] are the annotated_modified_files
+        return f"""
+        Generated output: 
+        {without_code}
+        Outputted files:
+        {stringify_files(modified_files)}
+        """
 def test_matcher():
     filepath = "base_page.txt"
     contents = open(filepath, "r").read()
