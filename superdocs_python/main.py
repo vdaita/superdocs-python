@@ -35,6 +35,8 @@ def main(
         model_name: str ="gpt-3.5-turbo",
         aux_model_name: str="gpt-3.5-turbo",
         use_absolute_filepath: bool = False,
+        generation_per_level: int = 3,
+        max_height: int = 3,
         api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None, 
         base_url: Annotated[str, typer.Argument(envvar="OPENAI_BASE_URL")] = "https://api.openai.com/v1/"
         ):
@@ -45,6 +47,8 @@ def main(
     model_name is the name of the main model that performs planning and executing
     aux_model_name is the name of the auxiliary model (right now mostly used for search)
     use_absolute_filepath should be used if you are inputting the absolute filepaths for each of the files (drag-and-drop from VSCode) 
+    generation_per_level is the number of choices that should be generated at each level
+    max_height is the maximum height of the choice tree
     api_key and base_url must be defined as environment variables
     By default, base_url points to OpenAI's endpoint
     """
@@ -98,7 +102,7 @@ def main(
         context = f"# Answer for request {google_request} \n {search_response}"
 
     executor = Executor(goal, files, context, model, aux_model=aux_model)
-    modifications = executor.chain_plan_and_execute_lats()
+    modifications = executor.chain_plan_and_execute_lats(generation_per_level=generation_per_level, max_height=max_height)
     end_time = time.time()
     print(f"[bold red]Completed in {end_time - start_time} seconds.[/bold red]")
 
