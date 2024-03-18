@@ -16,6 +16,7 @@ openai = "^1.13.3"
 chromadb = "^0.4.24"
 gitignore-parser = "^0.1.11"
 multiprocess = "^0.70.16"
+rich = "^13.7.1"
 
 
 [build-system]

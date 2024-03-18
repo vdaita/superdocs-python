@@ -8,11 +8,11 @@ import typer
 from typing import Optional
 from typing_extensions import Annotated
 import re
+import difflib
 
 import time
 
 from .retriever import CodebaseRetriever, SearchRetriever
-from .utils.prompts import INFORMATION_RETRIEVAL_PROMPT
 from .utils.model import create_model, extract_code_block_data, extract_xml_tags
 from .code_executor import Executor
 from . import code_executor
@@ -22,15 +22,13 @@ from rich.prompt import Prompt
 
 load_dotenv(".env")
 codebase = CodebaseRetriever("")
-large_model = None
-small_model = None
 files = {}
 
 app = typer.Typer()
 
 @app.command("run")
-def main(api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None):
-    global search_retriever, codebase, files, large_model, small_model
+def main(api_key: Annotated[str, typer.Argument(envvar="TOGETHER_API_KEY")] = None):
+    global search_retriever, codebase, files
 
     logging.basicConfig(filename="superdocs.log", filemode="w", level=logging.DEBUG)
     logging.info("Logging from main function")
@@ -42,11 +40,12 @@ def main(api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None
         return re.findall(r"'(.*?)'", text)
 
     if not(api_key):
-        print("[bold red]You must have an OpenAI API key loaded in your environment variables as OPENAI_API_KEY.[/bold red]")
+        print("[bold red]You must have an Together API key loaded in your environment variables as TOGETHER_API_KEY.[/bold red]")
+        return
     
-    large_model = create_model(api_key, "gpt-4-turbo-preview")
-    small_model = create_model(api_key, "gpt-3.5-turbo")
-    search_retriever = SearchRetriever(small_model)
+    model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz", base_temperature=0.1, base_max_tokens=1024)
+    aux_model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz", base_temperature=1, base_max_tokens=3096)
+    search_retriever = SearchRetriever(model)
 
     extracted_filenames = []
 
@@ -74,42 +73,38 @@ def main(api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None
             goal = Prompt.ask("[bold red]What objective would you like to run?[/bold red]")
             start_time = time.time()
 
-            information_request = large_model(INFORMATION_RETRIEVAL_PROMPT, messages=[f"Objective: {goal}", f"Files: {code_executor.stringify_files(files)}"])
-            internal_requests = extract_xml_tags(information_request, "a")
-            external_requests = extract_xml_tags(information_request, "b")
+            google_request = model(f"You are a helpful and intelligent AI assistant.", messages=[f"# Files: \n {code_executor.stringify_files(files)} \n \n # Goal \n {goal} \n Write a Google search query that would be helpful in finding information to achieve the goal."], max_tokens=30)
+            remove_chars = ['"', "'"]
+            for char in remove_chars:
+                google_request = google_request.replace(char, "")
 
-            print(f"[bold red]Internal requests: {internal_requests}[/bold red]")
-            print(f"[bold red]External requests: {external_requests}[/bold red]")
-
-            context = ""
-            for request in internal_requests:
-                retrieved = codebase.retrieve_documents(request)
-                retrieved_filename = [chunk.splitlines()[0].replace("Filepath: ", "").strip() for chunk in retrieved]
-
-                new_snippets = []
-
-                for index, retrieved in enumerate(retrieved):
-                    if not(retrieved_filename[index] in files):
-                        new_snippets.append(retrieved[0])
-                snippets = "\n".join(codebase.retrieve_documents(request))
-                context += f"------- \n # Snippets for query {request} \n {snippets}"
-                
-            for request in external_requests:
-                search_response = search_retriever.search(request)
-                context += f"------- \n # Answer for request {request} \n {search_response}"
+            search_response = search_retriever.search(google_request)
+            context = f"# Answer for request {google_request} \n {search_response}"
 
             # print("Context: ", context)
 
-            executor = Executor(goal, files, context, large_model, small_model)
-            modifications = executor.execute()
-            executor.files = modifications
+            executor = Executor(goal, files, context, model, aux_model=aux_model)
+            modifications = executor.chain_execute_rewrite()
             end_time = time.time()
             print(f"[bold red]Completed in {end_time - start_time} seconds.[/bold red]")
 
-            for filepath in modifications["unannotated"]:
-                file = open(os.path.join(directory, filepath), "w")
-                file.write(modifications["unannotated"][filepath])
-                file.close()
+            d = difflib.Differ()
+
+            for filepath in modifications:
+                filediff = d.compare(files[filepath], modifications[filepath])
+                print(f"Filepath: {filepath}")
+
+                only_relevant = []
+                for line in filediff:
+                    if line.startswith("+") or line.startswith("-") or line.startswith("?"):
+                        only_relevant.append(line)
+                print("\n".join(only_relevant))
+
+                accept = Prompt.ask("[bold red]Should this change be accepted? (y/N)[/bold red]")
+                if accept.lower().strip() == "y":
+                    file = open(os.path.join(directory, filepath), "w")
+                    file.write(modifications[filepath])
+                    file.close()
         elif "exit" in command:
             print("f[bold red]Exiting Superdocs[/bold red]")
             break

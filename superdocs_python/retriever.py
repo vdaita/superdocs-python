@@ -164,17 +164,22 @@ class CodebaseRetriever():
 
         return file_contents
     
+    def get_chunks_for_file(self, contents, filepath):
+        extension = filepath.split(".")[-1]
+        parser = get_parser(language_map[extension])
+        tree = parser.parse(contents.encode())
+        chunks = chunker(tree, contents)
+        return [chunk.extract_lines(contents) for chunk in chunks]  
+
     def generate_chunks(self):
         contents = self.get_directory_files()
         final_chunks = []
         for filepath in contents:
-            extension = filepath.split(".")[-1]
-            parser = get_parser(language_map[extension])
-            tree = parser.parse(contents[filepath].encode())
-            chunks = chunker(tree, contents[filepath])    
+            chunks = self.get_chunks_for_file(contents[filepath], filepath) 
+            language = language_map[filepath.split(".")[-1]]
             final_chunks.extend(
                 [{
-                    "content": f"Filepath: {filepath} \n" + chunk.extract_lines(contents[filepath]),
+                    "content": f"Filepath: {filepath} \n ```{language}\n" + chunk + "\n```",
                     "filename": filepath
                 } for chunk in chunks]
             )
