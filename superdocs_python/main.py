@@ -9,6 +9,7 @@ from typing import Optional
 from typing_extensions import Annotated
 import re
 import difflib
+from .utils import diff_utils
 
 import time
 
@@ -27,7 +28,26 @@ files = {}
 app = typer.Typer()
 
 @app.command("run")
-def main(api_key: Annotated[str, typer.Argument(envvar="TOGETHER_API_KEY")] = None):
+def main(
+        goal: str,
+        filepaths: str,
+        search: bool = False, 
+        model_name: str ="gpt-3.5-turbo",
+        aux_model_name: str="gpt-3.5-turbo",
+        use_absolute_filepath: bool = False,
+        api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None, 
+        base_url: Annotated[str, typer.Argument(envvar="OPENAI_BASE_URL")] = "https://api.openai.com/v1/"
+        ):
+    """
+    Try running a command with LLMs and directly editing files.
+    goal describes the operation you want to run on your files
+    filepaths should be a space or comma separated list of files. Each filepath should be enclosed within single quotes
+    model_name is the name of the main model that performs planning and executing
+    aux_model_name is the name of the auxiliary model (right now mostly used for search)
+    use_absolute_filepath should be used if you are inputting the absolute filepaths for each of the files (drag-and-drop from VSCode) 
+    api_key and base_url must be defined as environment variables
+    By default, base_url points to OpenAI's endpoint
+    """
     global search_retriever, codebase, files
 
     logging.basicConfig(filename="superdocs.log", filemode="w", level=logging.DEBUG)
@@ -40,75 +60,63 @@ def main(api_key: Annotated[str, typer.Argument(envvar="TOGETHER_API_KEY")] = No
         return re.findall(r"'(.*?)'", text)
 
     if not(api_key):
-        print("[bold red]You must have an Together API key loaded in your environment variables as TOGETHER_API_KEY.[/bold red]")
+        print("[bold red]You must have an API key loaded in your environment variables as OPENAI_API_KEY.[/bold red]")
         return
     
-    model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz", base_temperature=0.1, base_max_tokens=1024)
-    aux_model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz", base_temperature=1, base_max_tokens=3096)
+    model = create_model(os.environ["OPENAI_API_KEY"], model_name, base_url=base_url, base_temperature=1, base_max_tokens=3092)
+    aux_model = create_model(os.environ["OPENAI_API_KEY"], aux_model_name, base_url=base_url, base_temperature=1, base_max_tokens=2048)
     search_retriever = SearchRetriever(model)
 
     extracted_filenames = []
+    filepaths = extract_text_within_single_quotes(filepaths)
+    for filepath in filepaths:
+        if use_absolute_filepath:
+            shortened_filename = os.path.relpath(filepath, directory)
+        else:
+            shortened_filename = filepath
+        extracted_filenames.append(shortened_filename)
 
-    while True:
-        command = Prompt.ask("[bold red]What would you like to do next? ('add' to add file, 'run' to make an edit, 'exit' to exit)[/bold red]")
-        if "add" in command.lower():
-            add_files = Prompt.ask("[bold red]Copy filepaths (filenames that are within single-quotes will be considered, like from VSCode drag-and-drop): [/bold red]")
-            filenames = extract_text_within_single_quotes(add_files)
-            new_filenames = []
-            for filepath in filenames:
-                shortened_filename = os.path.relpath(filepath, directory)
-                extracted_filenames.append(shortened_filename)
-            extracted_filenames.extend(new_filenames)
-            print("[bold red]Finished adding new filenames to the list.[/bold red]")
-        elif "run" in command.lower():
-            files = {}
-            for rel_filepath in extracted_filenames:
-                logging.info("Current directory: " + directory)
-                logging.info("Loading file at path: " + os.path.join(directory, rel_filepath))
-                try:
-                    files[rel_filepath] = open(os.path.join(directory, rel_filepath), "r").read()
-                except Exception:
-                    print(f"[bold red]Error loading file: {rel_filepath}[/bold red]")
-            
-            goal = Prompt.ask("[bold red]What objective would you like to run?[/bold red]")
-            start_time = time.time()
+    files = {}
+    for rel_filepath in extracted_filenames:
+        logging.info("Current directory: " + directory)
+        logging.info("Loading file at path: " + os.path.join(directory, rel_filepath))
+        try:
+            files[rel_filepath] = open(os.path.join(directory, rel_filepath), "r").read()
+        except Exception:
+            print(f"[bold red]Error loading file: {rel_filepath}[/bold red]")
+    
+    start_time = time.time()
 
-            google_request = model(f"You are a helpful and intelligent AI assistant.", messages=[f"# Files: \n {code_executor.stringify_files(files)} \n \n # Goal \n {goal} \n Write a Google search query that would be helpful in finding information to achieve the goal."], max_tokens=30)
-            remove_chars = ['"', "'"]
-            for char in remove_chars:
-                google_request = google_request.replace(char, "")
+    google_request = model(f"You are a helpful and intelligent AI assistant.", messages=[f"# Files: \n {code_executor.stringify_files(files)} \n \n # Goal \n {goal} \n Write a Google search query that would be helpful in finding information to achieve the goal."], max_tokens=30)
+    remove_chars = ['"', "'"]
+    for char in remove_chars:
+        google_request = google_request.replace(char, "")
 
-            search_response = search_retriever.search(google_request)
-            context = f"# Answer for request {google_request} \n {search_response}"
+    context = ""
+    if search:
+        search_response = search_retriever.search(google_request)
+        context = f"# Answer for request {google_request} \n {search_response}"
 
-            # print("Context: ", context)
+    executor = Executor(goal, files, context, model, aux_model=aux_model)
+    modifications = executor.chain_plan_and_execute_lats()
+    end_time = time.time()
+    print(f"[bold red]Completed in {end_time - start_time} seconds.[/bold red]")
 
-            executor = Executor(goal, files, context, model, aux_model=aux_model)
-            modifications = executor.chain_execute_rewrite()
-            end_time = time.time()
-            print(f"[bold red]Completed in {end_time - start_time} seconds.[/bold red]")
-
-            d = difflib.Differ()
-
-            for filepath in modifications:
-                filediff = d.compare(files[filepath], modifications[filepath])
-                print(f"Filepath: {filepath}")
-
-                only_relevant = []
-                for line in filediff:
-                    if line.startswith("+") or line.startswith("-") or line.startswith("?"):
-                        only_relevant.append(line)
-                print("\n".join(only_relevant))
-
-                accept = Prompt.ask("[bold red]Should this change be accepted? (y/N)[/bold red]")
-                if accept.lower().strip() == "y":
-                    file = open(os.path.join(directory, filepath), "w")
-                    file.write(modifications[filepath])
-                    file.close()
-        elif "exit" in command:
-            print("f[bold red]Exiting Superdocs[/bold red]")
-            break
-
+    for filepath in modifications:
+        filediff = difflib.unified_diff(files[filepath].splitlines(), modifications[filepath].splitlines())
+        filediff = "\n".join(list(filediff))
+        search_replace_blocks = diff_utils.find_hunks(filediff)
+        
+        for block in search_replace_blocks:
+            print(f"[bold blue]{block.filepath}[/bold blue]")
+            print(f"[red]{block.search_block}[/red]")
+            print(f"[green]{block.replace_block}[/green]")
+            accept = Prompt.ask("[bold red]Should this change be accepted? (y/N)[/bold red]")
+            if accept.lower().strip() == "y":
+                file = open(os.path.join(directory, filepath), "w")
+                files[filepath] = files[filepath].replace(block.search_block, block.replace_block)
+                file.write(files[filepath])
+                file.close()                
     # Perform the relevant information request queries
 
 # if __name__ == "__main__":

@@ -5,14 +5,15 @@ from dataclasses import dataclass
 from .utils.model import extract_code_block_data, extract_xml_tags
 from multiprocess import Pool
 from .utils.node import Reflection, Node
+from .utils import diff_utils
 import diff_match_patch as dmp_module
 import logging
 import time
-from .utils.prompts import EDITBLOCK_PROMPTS, EDITBLOCK_FUNCTION_PROMPT
+from .utils import prompts
 import json
 
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, List
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +111,14 @@ class SearchReplaceChange:
 
 class FileModificationOperation(BaseModel):
     reasoning: str = Field(description="What step are you implementing? Think step-by-step about how that step should be implemented.")
+    filepath: str = Field(description="The filepath where the change is being made.")
     modification_type: Literal['insert_code_before', 'insert_code_after', 'replace']
-    location: str = Field(description="Describes where in the code this change should be made")
+    location: str = Field(description="Describes where in the code this change should be made using natural language, relative to other definitions/variables.")
     location_lines: str = Field(description="A unique stretch of lines from the original file including all whitespace, without skipping any lines, where you want this edit to be implemented")
-    insertion_lines: str = Field(description="A new stretch of lines including all whitespace that that you are inserting before, after, or using to replace (insert in place)")
+    insertion_lines: str = Field(description="A new stretch of lines including all whitespace that that you are inserting before, after, or using for replacement")
+
+class FileModificationOperationList(BaseModel):
+    file_modifications: List[FileModificationOperation]
 
 class FunctionType(BaseModel):
     reasoning: str = Field(description="Think about what the instruction refers in relation to the code itself.")
@@ -203,6 +208,88 @@ class Executor: # Uses an objective, general context for information, and a bunc
         self.verbose = verbose
         self.files = files
 
+    def chain_plan_and_execute_lats(self, generation_per_level=3, max_height=3, execution_prompt_type="rewrite"):
+        root = Node(self.files, Reflection(feedback="The goal has not yet been implemented.", score=0, found_solution=False))
+        if execution_prompt_type == "rewrite":
+            system_prompt = prompts.REWRITE_PLAN_AND_EXECUTE_PROMPT
+        elif execution_prompt_type == "udiff":
+            system_prompt = prompts.AIDER_UDIFF_PLAN_AND_EXECUTE_PROMPT
+
+        while root.height < max_height and not(root.is_solved):
+            best_child = root.best_child
+            if not(best_child):
+                best_child = root
+            rewrite_user_prompt = [[("user", f"# Original Files:\n{stringify_files(self.files)}"), 
+                                    ("assistant", f"# Most Recent Revision:\n{stringify_files(best_child.content)}")
+                                    ] for _ in range(generation_per_level)]
+            if best_child.content == self.files:
+                rewrite_user_prompt = [[("user", f"# Files:\n{stringify_files(self.files)}")] for _ in range(generation_per_level)]
+
+            rewritten_files = self.model([system_prompt]*generation_per_level, rewrite_user_prompt)
+
+            parsed_files = [self.process_rewrite(rewrite) for rewrite in rewritten_files]
+
+            reflections = [self.score_code_output(parse_file) for parse_file in parsed_files]
+
+            new_nodes = [Node(
+                content=files,
+                reflection=reflection,
+                parent=best_child
+            ) for (files, reflection) in zip(parsed_files, reflections)]
+            best_child.children.extend(new_nodes)
+
+        return root.best_child.content
+
+    def process_unified_diff_output(self, output):
+        diff_blocks = extract_code_block_data(output, "diff")
+
+        sr_blocks = []
+        for block in diff_blocks:
+            sr_blocks += diff_utils.parse_diff(block)
+        
+        original_files = self.files.copy()
+        modified_files = self.files.copy()
+        annotated_modified_files = self.files.copy() # Not going to be returned directly to the users, but is going to show the LLM which lines were modified. 
+
+        for block in sr_blocks:
+            if len(block.search_block.strip()) == 0 and len(block.replace_block.strip()) == 0:
+                continue
+
+            match_filepath = find_closest_file(block.filepath, list(self.files.keys()))
+            
+            if len(match_filepath) == 0:
+                continue
+    
+            if len(block.search_block.strip()) == 0:
+                if self.verbose:
+                    print("Replacing file contents:")
+                modified_files[match_filepath] = block.replace_block
+                annotated_write_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
+                annotated_modified_files[match_filepath] = annotated_write_block
+            else:
+                logger.debug("Trying to match file that's in: " + match_filepath)
+                best_match = find_best_match(block.search_block, original_files[match_filepath])
+                if best_match.score > 500:
+                    modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, block.replace_block)
+
+                    annotated_search_block = "\n".join(f"- {line}" for line in best_match.block.splitlines())
+                    annotated_replace_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
+                    annotated_modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, annotated_search_block + "\n" + annotated_replace_block)
+
+                    
+                    logger.debug("Making replacement: ")
+                    logger.debug("=====SEARCH=====")
+                    logger.debug(block.search_block)
+                    logger.debug(f"=====MATCH with closeness {best_match.score}======")
+                    logger.debug(best_match.block)
+                    logger.debug("=====REPLACE=====")
+                    logger.debug(block.replace_block)
+                else:
+                    logger.debug("Failed to match")
+                    logger.debug(block.search_block)
+        
+        return modified_files
+
     def get_single_file(self):
         return self.files[list(self.files.keys())[0]]
 
@@ -244,7 +331,6 @@ class Executor: # Uses an objective, general context for information, and a bunc
         logger.info(f"# OUTPUT EVALUATED: \n {generated_plan} \n # SCORE GIVEN {reflection} \n Simplicity: {variable_values['simplicity']}, Effectiveness: {variable_values['effectiveness']}, Detail: {variable_values['detail']}")
         
         return reflection
-
 
     def score_code_output(self, generated_files):
         system_prompts = [
@@ -352,14 +438,13 @@ class Executor: # Uses an objective, general context for information, and a bunc
         return processed_rewrite
 
     def implement_plan_blocks_multifunctions(self, plan):
-        
         pattern = r'^\d+\.\s+'
         steps = re.split(pattern, plan, flags=re.MULTILINE)
         new_files = self.files.copy()
 
         for step in steps:
             logger.info(f"Processing step {step}")
-            function_classification = self.aux_model.call_with_json(
+            function_classification = self.aux_model.call_with_json( # TODO: replace with semantic router
                 "Classify whether the change requested in the file-editing step below is a search-and-replace request or it can be better classified as an insertion request (either before and after).",
                 [f"# Original files: \n {stringify_files(self.files)}\n # Change requested \n{step}"],
                 FunctionType
@@ -410,14 +495,38 @@ class Executor: # Uses an objective, general context for information, and a bunc
         
         return new_files
 
-    def implement_plan_single_function(self, plan):
-        pass
+    def full_generation_single_function(self): # Doesn't work that well
+        new_files = self.files.copy()
+
+        logger.info(f"Processing plan at one go")
+
+        implemented_changes = self.aux_model.call_with_json(
+            "You are an intelligent and diligent programming assistant. Write and implement the following change in the file. ",
+            [f"# Original files:\n{stringify_files(self.files)}\n#Implement the following objective:\n{self.goal}"],
+            FileModificationOperationList
+        )
+
+        logger.info(f"Tool response: \n {json.dumps(implemented_changes, indent=4)}")
+
+        for implemented_change in implemented_changes["file_modifications"]:
+            filepath = find_closest_file(implemented_change["filepath"], list(self.files.keys()))
+            aligned_original_lines = find_best_match(implemented_change["location_lines"], files[filepath]).block
+            new_lines = implemented_change["insertion_lines"]
+
+            logger.info(f"Found filepath: \n {filepath}")
+            logger.info(f"Found original lines: \n{aligned_original_lines}")
+            logger.info(f"Found new lines: \n {new_lines}")
+            
+            if filepath in new_files:
+                new_files[filepath] = new_files[filepath].replace(aligned_original_lines, new_lines)
+
+        return new_files
 
     def implement_plan_blocks(self, plan):
         steps = re.compile('\n(?=[0-9].)').split(plan)
         for step in steps:
             file_change_prompt = f"# Original Files: \n {stringify_files(self.files)}\n **You must implement the following change** # Change: {step}"
-            choice_description = EDITBLOCK_PROMPTS
+            choice_description = prompts.EDITBLOCK_PROMPTS
             response = self.aux_model(choice_description, [file_change_prompt], temperature=0.1) 
             changes = extract_xml_tags(response, "change")
             edited_file = self.get_single_file()
@@ -455,7 +564,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
     
             return edited_file
 
-    def chain_execute(self):
+    def chain_lats_plan_and_execute(self):
         root = Node(self.files, Reflection(feedback="The goal has not yet been implemented.", score=0, found_solution=False))
         # TODO: Generate initial children with a specific prompt
 
@@ -556,12 +665,12 @@ if __name__ == "__main__":
     filepath = "/Users/vijaydaita/Files/uiuc/rxassist/rxassist/src/app/main/page.tsx"
     goal = "Edit the file so that a modal appears when the quiz finishes. The modal should display the score and have a refresh button."  
     files = {filepath: open(filepath, "r").read()}
-    # aux_model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo", base_temperature=0.1)
-    model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.8, max_tokens=3092)
-    aux_model = create_model(os.environ["TOGETHER_API_KEY"], "togethercomputer/CodeLlama-34b-Instruct", base_url="https://api.together.xyz/", temperature=0.1, max_tokens=700)
+    model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo", temperature=0.5, max_tokens=3092)
+    # model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.8, max_tokens=3092)
+    aux_model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.1, max_tokens=3092)
     
     executor = Executor(goal, files, "", model, aux_model=aux_model) 
-    plan = open("/Users/vijaydaita/Files/projects/superdocs/superdocs-python/superdocs_python/train-examples/plan.txt", "r").read()
-    generated_file = executor.implement_plan_blocks_functions(plan)
+    # plan = open("/Users/vijaydaita/Files/projects/superdocs/superdocs-python/superdocs_python/train-examples/plan.txt", "r").read()
+    generated_file = executor.full_generation_single_function()
     print(stringify_files(generated_file))
     # print(executor.chain_execute_block_edits())
