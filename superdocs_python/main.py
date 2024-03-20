@@ -67,8 +67,8 @@ def main(
         print("[bold red]You must have an API key loaded in your environment variables as OPENAI_API_KEY.[/bold red]")
         return
     
-    model = create_model(os.environ["OPENAI_API_KEY"], model_name, base_url=base_url, base_temperature=1, base_max_tokens=3092)
-    aux_model = create_model(os.environ["OPENAI_API_KEY"], aux_model_name, base_url=base_url, base_temperature=1, base_max_tokens=2048)
+    model = create_model(os.environ["OPENAI_API_KEY"], model_name, base_url=base_url, temperature=1, max_tokens=3092)
+    aux_model = create_model(os.environ["OPENAI_API_KEY"], aux_model_name, base_url=base_url, temperature=1, max_tokens=2048)
     search_retriever = SearchRetriever(model)
 
     extracted_filenames = []
@@ -79,6 +79,8 @@ def main(
         else:
             shortened_filename = filepath
         extracted_filenames.append(shortened_filename)
+
+    # TODO: generate a list of files in the repository and allow for auto-selection
 
     files = {}
     for rel_filepath in extracted_filenames:
@@ -91,13 +93,12 @@ def main(
     
     start_time = time.time()
 
-    google_request = model(f"You are a helpful and intelligent AI assistant.", messages=[f"# Files: \n {code_executor.stringify_files(files)} \n \n # Goal \n {goal} \n Write a Google search query that would be helpful in finding information to achieve the goal."], max_tokens=30)
-    remove_chars = ['"', "'"]
-    for char in remove_chars:
-        google_request = google_request.replace(char, "")
-
     context = ""
     if search:
+        google_request = model(f"You are a helpful and intelligent AI assistant.", messages=[f"# Files: \n {code_executor.stringify_files(files)} \n \n # Goal \n {goal} \n Write a Google search query that would be helpful in finding information to achieve the goal."])
+        remove_chars = ['"', "'"]
+        for char in remove_chars:
+            google_request = google_request.replace(char, "")
         search_response = search_retriever.search(google_request)
         context = f"# Answer for request {google_request} \n {search_response}"
 
