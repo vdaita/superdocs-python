@@ -36,7 +36,7 @@ def main(
         model_name: str ="gpt-3.5-turbo",
         aux_model_name: str="gpt-3.5-turbo",
         use_absolute_filepath: bool = False,
-        edit_method: str = "rewrite",
+        use_udiff: bool = False,
         generation_per_level: int = 3,
         max_height: int = 3,
         api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None,
@@ -113,7 +113,7 @@ def main(
         context = f"# Answer for request {google_request} \n {search_response}"
 
     executor = Executor(goal, files, context, model, aux_model=aux_model)
-    modifications = executor.chain_plan_and_execute_lats(generation_per_level=generation_per_level, max_height=max_height)
+    modifications = executor.chain_plan_and_execute_lats(generation_per_level=generation_per_level, max_height=max_height, )
 
     logging.info(f"Modifications: {modifications}")
 

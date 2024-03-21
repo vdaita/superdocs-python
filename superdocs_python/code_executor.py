@@ -612,7 +612,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
             return edited_file
 
-    def chain_lats_plan_and_execute(self):
+    def chain_lats_aplit_plan_and_execute(self):
         root = Node(self.files, Reflection(feedback="The goal has not yet been implemented.", score=0, found_solution=False))
         # TODO: Generate initial children with a specific prompt
 
@@ -747,13 +747,13 @@ if __name__ == "__main__":
     filepaths = ["/Users/vijaydaita/Files/projects/microapps/remove-background/src/App.js", "/Users/vijaydaita/Files/projects/microapps/remove-background/src/index.js"]
     goal = "Edit the file so that a modal appears when the quiz finishes. The modal should display the score and have a refresh button."
     files = {filepath: open(filepath, "r").read() for filepath in filepaths}
-    model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo", temperature=0.5, max_tokens=3092)
+    model = create_model(os.environ["OPENAI_API_KEY"], "gpt-4-turbo-preview", temperature=0.5, max_tokens=3092)
     # # model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.8, max_tokens=3092)
     # aux_model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.1, max_tokens=3092)
 
     executor = Executor(goal, files, "", model, aux_model=model)
-    executor.process_rewrite(rewrite_file)
+    # executor.process_rewrite(rewrite_file)
     # plan = open("/Users/vijaydaita/Files/projects/superdocs/superdocs-python/superdocs_python/train-examples/plan.txt", "r").read()
-    # generated_file = executor.full_generation_single_function()
-    # logger.info(stringify_files(generated_file))
+    generated_file = executor.chain_plan_and_execute_lats(execution_prompt_type="udiff")
+    logger.info(stringify_files(generated_file))
     # logger.info(executor.chain_execute_block_edits())
