@@ -144,7 +144,8 @@ class SearchAndReplaceCodeType(BaseModel):
     original_lines: str = Field(description="A unique stretch of lines from the original file including all whitespace, without skipping any lines")
     new_replacement_lines: str = Field(description="The new lines of code that you want to insert after original lines in the file")
 
-
+class InvalidRewriteTypeException(Exception):
+    pass
 
 def line_relevant(line):
     return not(len(line.strip()) == 0 or line.startswith("#") or line.startswith("//"))
@@ -217,6 +218,8 @@ class Executor: # Uses an objective, general context for information, and a bunc
             system_prompt = prompts.AIDER_REWRITE_PLAN_AND_EXECUTE_PROMPT
         elif execution_prompt_type == "udiff":
             system_prompt = prompts.AIDER_UDIFF_PLAN_AND_EXECUTE_PROMPT
+        else:
+            raise InvalidRewriteTypeException()
 
         while root.height < max_height and not(root.is_solved):
             best_child = root.best_child
@@ -230,7 +233,14 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
             rewritten_files = self.model([system_prompt]*generation_per_level, rewrite_user_prompt)
 
-            parsed_files = [self.process_rewrite(rewrite) for rewrite in rewritten_files]
+            parse_files = []
+            if execution_prompt_type == "rewrite":
+                parsed_files = [self.process_rewrite(rewrite) for rewrite in rewritten_files]
+            elif execution_prompt_type == "udiff":
+                parsed_files = [self.process_unified_diff_output(udiff) for udiff in rewritten_files]
+            else:
+                raise InvalidRewriteTypeException()
+
             logger.info(f"Generated parsed files: \n {[stringify_files(parse_file) for parse_file in parsed_files]}")
             reflections = [self.score_code_output(parse_file) for parse_file in parsed_files]
             logger.info(f"Generated reflections: {reflections}")
@@ -337,7 +347,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
         return reflection
 
     def score_code_output(self, generated_files):
-        system_prompts = "Compare the generated files to the original file. First, state the differences between the original file and the generated files. Then, reflect on how the generated code completed the goal. Write a score from 0-100 and enclose that score within <score></score> XML tags."\
+        system_prompts = "Compare the generated files to the original file. First, state the differences between the original file and the generated files. Then, reflect on how the generated code completed the goal, given the provided context. Write a score from 0-100 and enclose that score within <score></score> XML tags."\
               "Before outputting the score, think step by step. Write feedback, describe the next step of changes that need to be made and enclose it within the <feedback></feedback> XML tags. If the goal is fully solved, while maintaining consistency and style, output <problem-solved/>. Otherwise, output <problem-not-solved/>"
 
         user_prompts = [
