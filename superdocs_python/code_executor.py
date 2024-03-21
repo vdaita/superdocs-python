@@ -11,6 +11,8 @@ import logging
 import time
 from .utils import prompts
 import json
+import sys
+from pathvalidate import ValidationError, validate_filename
 
 from pydantic import BaseModel, Field
 from typing import Literal, List
@@ -175,7 +177,7 @@ def find_best_match(query_code: str, original_code: str):
             # Weighting the first and last lines by 3x
             score += 3*fuzz.ratio(original_lines[start_line], query_lines[0])
             score += 3*fuzz.ratio(original_lines[end_line], query_lines[-1])
-        
+
             if score > best_match.score:
                 best_match = Match(full_original_snippet, score)
     return best_match
@@ -186,14 +188,15 @@ def find_closest_file(filepath, all_filepaths):
         score = fuzz.ratio(filepath, fp)
         if score > best_match.score:
             best_match = Match(fp, score)
-    
+
     return best_match.block if best_match.score > 0.7 else filepath
 
 def stringify_files(file_dictionary):
         file_string = ""
         for file in file_dictionary:
-            file_string += f"[{file}]"
+            file_string += f"{file}\n"
             file_string += f"```\n{file_dictionary[file]}\n```\n"
+            file_string += "-----\n"
         return file_string
 
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
@@ -211,7 +214,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
     def chain_plan_and_execute_lats(self, generation_per_level=3, max_height=3, execution_prompt_type="rewrite"):
         root = Node(self.files, Reflection(feedback="The goal has not yet been implemented.", score=0, found_solution=False))
         if execution_prompt_type == "rewrite":
-            system_prompt = prompts.REWRITE_PLAN_AND_EXECUTE_PROMPT
+            system_prompt = prompts.AIDER_REWRITE_PLAN_AND_EXECUTE_PROMPT
         elif execution_prompt_type == "udiff":
             system_prompt = prompts.AIDER_UDIFF_PLAN_AND_EXECUTE_PROMPT
 
@@ -219,11 +222,11 @@ class Executor: # Uses an objective, general context for information, and a bunc
             best_child = root.best_child
             if not(best_child):
                 best_child = root
-            rewrite_user_prompt = [[("user", f"# Original Files:\n{stringify_files(self.files)}"), 
+            rewrite_user_prompt = [[("user", f"# Original Files:\n{stringify_files(self.files)} \n # Goal to implement: {self.goal}"),
                                     ("assistant", f"# Most Recent Revision:\n{stringify_files(best_child.content)}")
                                     ] for _ in range(generation_per_level)]
             if best_child.content == self.files:
-                rewrite_user_prompt = [[("user", f"# Files:\n{stringify_files(self.files)}")] for _ in range(generation_per_level)]
+                rewrite_user_prompt = [[("user", f"# Files:\n{stringify_files(self.files)} \n # Goal to implement: {self.goal}")] for _ in range(generation_per_level)]
 
             rewritten_files = self.model([system_prompt]*generation_per_level, rewrite_user_prompt)
 
@@ -232,10 +235,10 @@ class Executor: # Uses an objective, general context for information, and a bunc
             reflections = [self.score_code_output(parse_file) for parse_file in parsed_files]
 
             new_nodes = [Node(
-                content=files,
+                content=pf,
                 reflection=reflection,
                 parent=best_child
-            ) for (files, reflection) in zip(parsed_files, reflections)]
+            ) for (pf, reflection) in zip(parsed_files, reflections)]
             best_child.children.extend(new_nodes)
 
         return root.best_child.content
@@ -246,20 +249,20 @@ class Executor: # Uses an objective, general context for information, and a bunc
         sr_blocks = []
         for block in diff_blocks:
             sr_blocks += diff_utils.parse_diff(block)
-        
+
         original_files = self.files.copy()
         modified_files = self.files.copy()
-        annotated_modified_files = self.files.copy() # Not going to be returned directly to the users, but is going to show the LLM which lines were modified. 
+        annotated_modified_files = self.files.copy() # Not going to be returned directly to the users, but is going to show the LLM which lines were modified.
 
         for block in sr_blocks:
             if len(block.search_block.strip()) == 0 and len(block.replace_block.strip()) == 0:
                 continue
 
             match_filepath = find_closest_file(block.filepath, list(self.files.keys()))
-            
+
             if len(match_filepath) == 0:
                 continue
-    
+
             if len(block.search_block.strip()) == 0:
                 if self.verbose:
                     print("Replacing file contents:")
@@ -276,7 +279,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
                     annotated_replace_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
                     annotated_modified_files[match_filepath] = modified_files[match_filepath].replace(best_match.block, annotated_search_block + "\n" + annotated_replace_block)
 
-                    
+
                     logger.debug("Making replacement: ")
                     logger.debug("=====SEARCH=====")
                     logger.debug(block.search_block)
@@ -287,7 +290,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 else:
                     logger.debug("Failed to match")
                     logger.debug(block.search_block)
-        
+
         return modified_files
 
     def get_single_file(self):
@@ -298,12 +301,11 @@ class Executor: # Uses an objective, general context for information, and a bunc
             "Evaluate the plan's simplicity (does the plan use a minimal number of new variables, libraries, and imports), effectiveness (if implemented, how well will it achieve the goal), and detail (for each change, does it describe exactly where/how to make the change within the code)."\
             "Output your response in the following manner, using XML tags: \n <simplicity>Number from 0-10</simplicity> \n <effectiveness>Number from 0-10</effectiveness> \n <detail>Number from 0-10</detail> \n <feedback>Bullet points</feedback>\n"
         user_prompt = [f"# Generated plan: \n {generated_plan} \n # Goal: {self.goal} \n # Files: {stringify_files(self.files)}"]
-        
 
         comparison = self.model(system_prompt, user_prompt)
         numerical_variables = ["simplicity", "effectiveness", "detail"]
         variable_values = {}
-        
+
         for variable in numerical_variables:
             extracted = extract_xml_tags(comparison, "simplicity")
             if len(extracted) == 0:
@@ -329,21 +331,55 @@ class Executor: # Uses an objective, general context for information, and a bunc
         reflection = Reflection(feedback=feedback, score=score, found_solution=(score > 0.9))
 
         logger.info(f"# OUTPUT EVALUATED: \n {generated_plan} \n # SCORE GIVEN {reflection} \n Simplicity: {variable_values['simplicity']}, Effectiveness: {variable_values['effectiveness']}, Detail: {variable_values['detail']}")
-        
+
         return reflection
 
     def score_code_output(self, generated_files):
+        system_prompts = "Compare the generated files to the original file. First, state the differences between the original file and the generated files. Then, reflect on how the generated code completed the goal. Write a score from 0-100 and enclose that score within <score></score> XML tags."\
+              "Before outputting the score, think step by step. Write feedback, describe the next step of changes that need to be made and enclose it within the <feedback></feedback> XML tags. If the goal is fully solved, while maintaining consistency and style, output <problem-solved/>. Otherwise, output <problem-not-solved/>"
+
+        user_prompts = [
+            f"# Original files: \n {stringify_files(self.files)} \n # Goal: \n {self.goal} \n # Generated files: \n {stringify_files(generated_files)}"
+        ]
+
+        comparison = self.model(system_prompts, user_prompts)
+
+        score = extract_xml_tags(comparison, "score")
+        if len(score) == 0:
+            score = 0
+        else:
+            score = re.findall(r'\d+', score[0])
+            if len(score) == 0:
+                score = 0
+            else:
+                score = int(score[0])
+
+        feedback = extract_xml_tags(comparison, "feedback")
+        if len(feedback) == 0:
+            feedback = "There is no feedback."
+        else:
+            feedback = feedback[0]
+            if len(feedback) == 0:
+                feedback = "There is no feedback."
+
+        reflection = Reflection(feedback=feedback, score=score, found_solution=("problem-solved" in comparison))
+
+        logger.info(f"# OUTPUT EVALUATED: \n {stringify_files(generated_files)} \n # SCORE GIVEN {reflection}")
+
+        return reflection
+
+    def score_code_output_two_step(self, generated_files):
         system_prompts = [
         "State whether or not the generated files meet the intended features and is syntactically and logically correct. First, think step by step and then <YES> if the generated code meets the requirements or <NO> otherwise.",
         "Compare the file to the original file. First, state the differences between the original file and the generated files. Then, reflect on how the generated code completed the goal. Write a score from 0-100 and enclose that score within <score></score> XML tags."
          + "Before outputting the score, think step by step. Write feedback and enclose it within the <feedback></feedback> XML tags."
-        ]    
+        ]
 
         user_prompts = [
-            [f"# Generated files: \n {stringify_files(generated_files)} \n # Intended features: \n {self.end_description}"],
+            [f"# Generated files: \n {stringify_files(generated_files)} \n # Goal: \n {self.goal}"],
             [f"# Original files: \n {stringify_files(self.files)} \n # Goal: \n {self.goal} \n # Generated files: \n {stringify_files(generated_files)}"]
         ]
-    
+
         meets_description, comparison = self.model(system_prompts, user_prompts)
         meets_description = "<YES>" in meets_description
 
@@ -368,9 +404,9 @@ class Executor: # Uses an objective, general context for information, and a bunc
         reflection = Reflection(feedback=feedback, score=score, found_solution=meets_description)
 
         logger.info(f"# OUTPUT EVALUATED: \n {stringify_files(generated_files)} \n # SCORE GIVEN {reflection}")
-        
+
         return reflection
-    
+
     def chain_execute_rewrite(self):
         plan = self.refine_plan()
         print("PLAN")
@@ -400,7 +436,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
             if not(best_child):
                 best_child = root
 
-            plan_user_prompt = [("user", f"# Original Files: \n {stringify_files(self.files)} \n # Goal: {self.goal}"), 
+            plan_user_prompt = [("user", f"# Original Files: \n {stringify_files(self.files)} \n # Goal: {self.goal}"),
                                     ("assistant", f"# Most Recent Revision \n {best_child.content}"),
                                     ("user", f"# Feedback \n {best_child.reflection.as_message} \n Please fully rewrite the plan.")]
 
@@ -409,7 +445,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
             candidate_plans = self.model([plan_system_prompt]*3, [plan_user_prompt]*3)
 
-            # TODO: Evaluate the newly generated parsed 
+            # TODO: Evaluate the newly generated parsed
             reflections = [self.score_plan_output(candidate_plan) for candidate_plan in candidate_plans]
 
             # TODO: Add the new files with evaluations and everything into the solution
@@ -489,10 +525,10 @@ class Executor: # Uses an objective, general context for information, and a bunc
             logger.info(f"Found filepath: \n {filepath}")
             logger.info(f"Found original lines: \n{aligned_original_lines}")
             logger.info(f"Found new lines: \n {new_lines}")
-            
+
             if filepath in new_files:
                 new_files[filepath] = new_files[filepath].replace(aligned_original_lines, new_lines)
-        
+
         return new_files
 
     def full_generation_single_function(self): # Doesn't work that well
@@ -516,7 +552,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
             logger.info(f"Found filepath: \n {filepath}")
             logger.info(f"Found original lines: \n{aligned_original_lines}")
             logger.info(f"Found new lines: \n {new_lines}")
-            
+
             if filepath in new_files:
                 new_files[filepath] = new_files[filepath].replace(aligned_original_lines, new_lines)
 
@@ -527,7 +563,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
         for step in steps:
             file_change_prompt = f"# Original Files: \n {stringify_files(self.files)}\n **You must implement the following change** # Change: {step}"
             choice_description = prompts.EDITBLOCK_PROMPTS
-            response = self.aux_model(choice_description, [file_change_prompt], temperature=0.1) 
+            response = self.aux_model(choice_description, [file_change_prompt], temperature=0.1)
             changes = extract_xml_tags(response, "change")
             edited_file = self.get_single_file()
             print(response)
@@ -561,7 +597,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 elif len(bottom_block) == 1:
                     bottom_block = bottom_block[0]
                     edited_file = edited_file + "\n" + bottom_block
-    
+
             return edited_file
 
     def chain_lats_plan_and_execute(self):
@@ -574,21 +610,21 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 best_child = root
 
             plan_system_prompt = f"First, rewrite the goal to be more specific and expanded. Then, write a search-replace plan to achieve the following goal. Use reflection feedback as guidance on writing a better plan. Describe files and code changes in detail. \n Goal: {self.goal}"
-            plan_user_prompt = [("user", f"# Original File: \n {stringify_files(self.files)} \n \n # Goal: {self.goal}"), 
+            plan_user_prompt = [("user", f"# Original File: \n {stringify_files(self.files)} \n \n # Goal: {self.goal}"),
                                     ("assistant", f"# Most Recent Revision \n {stringify_files(best_child.content)}"),
                                     ("user", f"# Feedback \n {best_child.reflection.as_message}")]
-            
+
             if best_child.content == self.files: # The first one was the initial node, just send the original file and the goal.
                 plan_system_prompt = f"First, rewrite the goal to be more specific and expanded. Then, write a search-replace plan to achieve the following goal. Describe files and code changes in detail. \n Goal: {self.goal}"
                 plan_user_prompt = [("user", f"# Original File: \n {stringify_files(self.files)} \n \n # Goal: {self.goal}")]
 
             candidate_plans = self.model([plan_system_prompt]*5, [plan_user_prompt]*5)
             rewrite_system_prompt = f"Based on the plan, rewrite each relevant file. Do not truncate code for brevity. Format each file rewrite in the following manner: \n [filepath]\n```language\ncode\n```."
-            rewrite_user_prompt = [[("user", f"# Original Files:\n{stringify_files(self.files)}"), 
-                                    ("assistant", f"# Most Recent Revision:\n{stringify_files(best_child.content)}"), 
+            rewrite_user_prompt = [[("user", f"# Original Files:\n{stringify_files(self.files)}"),
+                                    ("assistant", f"# Most Recent Revision:\n{stringify_files(best_child.content)}"),
                                     ("user", f"# Implementation Plan \n {candidate_plan}")] for candidate_plan in candidate_plans]
             if best_child.content == self.files:
-                rewrite_user_prompt = [[("user", f"# Files:\n{stringify_files(self.files)}"), 
+                rewrite_user_prompt = [[("user", f"# Files:\n{stringify_files(self.files)}"),
                                 ("user", f"# Implementation Plan \n {candidate_plan}")] for candidate_plan in candidate_plans]
 
             rewritten_files = self.model([rewrite_system_prompt]*5, rewrite_user_prompt)
@@ -611,14 +647,21 @@ class Executor: # Uses an objective, general context for information, and a bunc
         return root.best_child.content
 
     def process_rewrite(self, output):
+        logger.debug(f"Processing rewrite: \n {output}")
+
         start_time = time.time()
-        
-        pattern = r'(?s)(.*?)\n```(.*?)\n(.*?)\n```'
-        matches = re.findall(pattern, output)
-        triplets = [(match[0], match[1], match[2]) for match in matches]
+
         new_files = {}
-        for triple in triplets:
-            new_files[triple[0]] = triple[2]
+        pattern = r"(.*?)\n```\n([\s\S]*?)\n```"
+        matches = re.findall(pattern, output)
+
+        if matches:
+            for match in matches:
+                filepath = match[0]
+                code = match[1]
+                new_files[filepath] = code
+
+        logger.info(f"Matches for code block format: {matches}")
         dmp = dmp_module.diff_match_patch()
         dmp.Match_Threshold = 0.90
         dmp.Match_Distance = 10000
@@ -633,27 +676,44 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
         for filepath in new_files:
             original_filepath = filepath
-            trimmed_filepath = filepath.replace("[", "").replace("]", "")
+            trimmed_filepath = filepath.replace("[", "").replace("]", "").replace("*", "").strip()
+            trimmed_filepath = trimmed_filepath.split(" ")[-1]
+            cfilepath = find_closest_file(trimmed_filepath, list(self.files.keys()))
+            cfilepath = cfilepath.strip()
 
-            cfilepath = find_closest_file(trimmed_filepath, list(new_files.keys()))
+            logger.info(f"Closest filepath found for {trimmed_filepath}: {cfilepath}")
 
+            valid_file = True
             if cfilepath in self.files:
-                original_file = self.files[trimmed_filepath]
+                original_file = self.files[cfilepath]
+                logger.info(f"Editing existing filepath: {cfilepath}")
             else:
-                original_file = ""
+                # Is the filepath plausible?
+                try:
+                    validate_filename(cfilepath)
+                    original_file = ""
+                    logger.info(f"Identified valid new file for: {cfilepath}")
+                except ValidationError as e:
+                    valid_file = False
+                    continue
+
+            if not(valid_file):
+                logger.info(f"File received is not valid file! {cfilepath}")
+                continue
 
             generated_diff = dmp.diff_main(original_file, new_files[original_filepath])
             dmp.diff_cleanupSemantic(generated_diff)
             generated_patches = dmp.patch_make(original_file, generated_diff)
             logger.info(f"Generated patches: {generated_patches}")
-            patched_files[trimmed_filepath] = dmp.patch_apply(generated_patches, original_file)[0]
-            patches[trimmed_filepath] = dmp.patch_toText(generated_patches)
+            patched_files[cfilepath] = dmp.patch_apply(generated_patches, original_file)[0]
+            patches[cfilepath] = dmp.patch_toText(generated_patches)
 
         end_time = time.time()
-        logging.info(f"Finished processing with patches in: {end_time - start_time}")        
-    
+        logging.info(f"Finished processing with patches in: {end_time - start_time}")
+        logging.info(f"Patched files: \n {patched_files.keys()} \n {stringify_files(patched_files)}")
+
         return patched_files
-    
+
 
 if __name__ == "__main__":
     from .utils.model import create_model
@@ -662,15 +722,20 @@ if __name__ == "__main__":
 
     load_dotenv(".env")
     logging.basicConfig(level=logging.INFO)
-    filepath = "/Users/vijaydaita/Files/uiuc/rxassist/rxassist/src/app/main/page.tsx"
-    goal = "Edit the file so that a modal appears when the quiz finishes. The modal should display the score and have a refresh button."  
-    files = {filepath: open(filepath, "r").read()}
+
+    rewrite_file = open("test.txt", "r").read()
+
+
+    filepaths = ["/Users/vijaydaita/Files/projects/microapps/remove-background/src/App.js", "/Users/vijaydaita/Files/projects/microapps/remove-background/src/index.js"]
+    goal = "Edit the file so that a modal appears when the quiz finishes. The modal should display the score and have a refresh button."
+    files = {filepath: open(filepath, "r").read() for filepath in filepaths}
     model = create_model(os.environ["OPENAI_API_KEY"], "gpt-3.5-turbo", temperature=0.5, max_tokens=3092)
-    # model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.8, max_tokens=3092)
-    aux_model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.1, max_tokens=3092)
-    
-    executor = Executor(goal, files, "", model, aux_model=aux_model) 
+    # # model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.8, max_tokens=3092)
+    # aux_model = create_model(os.environ["TOGETHER_API_KEY"], "mistralai/Mixtral-8x7B-Instruct-v0.1", base_url="https://api.together.xyz/", temperature=0.1, max_tokens=3092)
+
+    executor = Executor(goal, files, "", model, aux_model=model)
+    executor.process_rewrite(rewrite_file)
     # plan = open("/Users/vijaydaita/Files/projects/superdocs/superdocs-python/superdocs_python/train-examples/plan.txt", "r").read()
-    generated_file = executor.full_generation_single_function()
-    print(stringify_files(generated_file))
+    # generated_file = executor.full_generation_single_function()
+    # print(stringify_files(generated_file))
     # print(executor.chain_execute_block_edits())

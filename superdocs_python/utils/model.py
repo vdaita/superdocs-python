@@ -15,10 +15,11 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
-async def call_chatgpt_async(session, messages, model_name, key, endpoint): # https://medium.com/@nitin_l/parallel-chatgpt-requests-from-python-6ab48cc2a610
+async def call_chatgpt_async(session, messages, model_name, key, endpoint, max_tokens): # https://medium.com/@nitin_l/parallel-chatgpt-requests-from-python-6ab48cc2a610
     payload = {
         'model': model_name,
-        'messages': messages
+        'messages': messages,
+        'max_tokens': max_tokens
     }
     try:
         start_time = time.time()
@@ -38,9 +39,9 @@ async def call_chatgpt_async(session, messages, model_name, key, endpoint): # ht
     except:
         print("Request failed.")
 
-async def bulk_call(message_sets, model_name, api_key, base_url):
+async def bulk_call(message_sets, model_name, api_key, base_url, max_tokens):
     async with aiohttp.ClientSession() as session, asyncio.TaskGroup() as tg:
-        tasks = [tg.create_task(call_chatgpt_async(session, message_set, model_name, api_key, base_url)) for message_set in message_sets]
+        tasks = [tg.create_task(call_chatgpt_async(session, message_set, model_name, api_key, base_url, max_tokens)) for message_set in message_sets]
         responses = await asyncio.gather(*tasks)
     return responses
 
@@ -106,7 +107,7 @@ def create_model(api_key, model_name, base_url="https://api.openai.com/v1", temp
             # logger.info(f"Model response:\n {response.choices[0].message.model_dump_json()}")
             return response.choices[0].message.model_dump()['tool_calls']
 
-        def __call__(self, system_prompt, messages):
+        def __call__(self, system_prompt, messages, max_tokens=max_tokens):
             logger.info(f"Sending model request")
             if type(system_prompt) == list: # That means that multiple requests should be made
                 logger.info("Bulk processing")
@@ -117,7 +118,7 @@ def create_model(api_key, model_name, base_url="https://api.openai.com/v1", temp
                     ] + [message_fmt(message) for message in messages[message_index]]
                     # print(json.dumps(new_messages, indent=4))
                     message_sets.append(new_messages)
-                results = asyncio.run(bulk_call(message_sets, model_name, api_key, base_url))
+                results = asyncio.run(bulk_call(message_sets, model_name, api_key, base_url, max_tokens))
                 return results
             else:
                 start_time = time.time()
