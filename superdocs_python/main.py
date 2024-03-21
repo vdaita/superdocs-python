@@ -36,6 +36,7 @@ def main(
         model_name: str ="gpt-3.5-turbo",
         aux_model_name: str="gpt-3.5-turbo",
         use_absolute_filepath: bool = False,
+        edit_method: str = "rewrite",
         generation_per_level: int = 3,
         max_height: int = 3,
         api_key: Annotated[str, typer.Argument(envvar="OPENAI_API_KEY")] = None,
