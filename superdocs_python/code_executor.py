@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from typing import Literal, List
 
 logger = logging.getLogger(__name__)
+DELIM = "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
 
 tools = [
             {
@@ -197,7 +198,7 @@ def stringify_files(file_dictionary):
         for file in file_dictionary:
             file_string += f"{file}\n"
             file_string += f"```\n{file_dictionary[file]}\n```\n"
-            file_string += "-----\n"
+            file_string += f"{DELIM}\n"
         return file_string
 
 class Executor: # Uses an objective, general context for information, and a bunch of current files as context
