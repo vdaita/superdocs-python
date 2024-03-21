@@ -96,6 +96,8 @@ def main(
         except Exception:
             print(f"[bold red]Error loading file: {rel_filepath}[/bold red]")
 
+    original_files = files.copy()
+
     logging.info(f"Stringified files: {stringify_files(files)}")
 
     start_time = time.time()
@@ -123,22 +125,26 @@ def main(
     logging.debug(f"ORIGINAL FILES: \n {stringify_files(files)} \n ------------- \n MODIFIED FILES: {stringify_files(modifications)}")
 
     for filepath in modifications:
-        filediff = difflib.unified_diff(files[filepath].splitlines(), modifications[filepath].splitlines())
-        filediff = "\n".join(list(filediff))
-        logging.debug(f"Generated unified diff: {filediff} \n {len(files[filepath].splitlines())} \n {len(modifications[filepath].splitlines())} ")
+        logging.debug(f"{json.dumps(original_files[filepath].splitlines(), indent=4)}")
+        logging.debug(f"{json.dumps(modifications[filepath].splitlines(), indent=4)}")
+        filediff = "\n".join(difflib.unified_diff(original_files[filepath].splitlines(), modifications[filepath].splitlines(), n=2))
+        logging.debug(f"Generated unified diff: {filediff} \n {len(original_files[filepath].splitlines())} \n {len(modifications[filepath].splitlines())} ")
 
         search_replace_blocks = diff_utils.parse_diff(filediff)
+        logging.debug(f"Search-replace blocks found: {search_replace_blocks}")
 
-        for block in search_replace_blocks:
-            print(f"[bold blue]{block.filepath}[/bold blue]")
-            print(f"[red]{block.search_block}[/red]")
-            print(f"[green]{block.replace_block}[/green]")
-            accept = Prompt.ask("[bold red]Should this change be accepted? (y/N)[/bold red]")
-            if accept.lower().strip() == "y":
-                file = open(os.path.join(directory, filepath), "w")
-                files[filepath] = files[filepath].replace(block.search_block, block.replace_block)
-                file.write(files[filepath])
-                file.close()
+        for block_index, block in enumerate(search_replace_blocks):
+            # print(f"Block index: {block_index}")
+            if not(len(block.search_block.strip()) == 0 and len(block.replace_block.strip()) == 0):
+                print(f"[bold blue]{filepath}[/bold blue]")
+                print(f"[red]{block.search_block}[/red]")
+                print(f"[green]{block.replace_block}[/green]")
+                accept = Prompt.ask("[bold red]Should this change be accepted? (y/N)[/bold red]")
+                if accept.lower().strip() == "y":
+                    file = open(os.path.join(directory, filepath), "w")
+                    files[filepath] = files[filepath].replace(block.search_block, block.replace_block)
+                    file.write(files[filepath])
+                    file.close()
     # Perform the relevant information request queries
 
 # if __name__ == "__main__":

@@ -189,7 +189,7 @@ def find_closest_file(filepath, all_filepaths):
         if score > best_match.score:
             best_match = Match(fp, score)
 
-    return best_match.block if best_match.score > 0.7 else filepath
+    return best_match.block if best_match.score > 0.85 else filepath
 
 def stringify_files(file_dictionary):
         file_string = ""
@@ -231,8 +231,9 @@ class Executor: # Uses an objective, general context for information, and a bunc
             rewritten_files = self.model([system_prompt]*generation_per_level, rewrite_user_prompt)
 
             parsed_files = [self.process_rewrite(rewrite) for rewrite in rewritten_files]
-
+            logger.info(f"Generated parsed files: \n {[stringify_files(parse_file) for parse_file in parsed_files]}")
             reflections = [self.score_code_output(parse_file) for parse_file in parsed_files]
+            logger.info(f"Generated reflections: {reflections}")
 
             new_nodes = [Node(
                 content=pf,
@@ -241,6 +242,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
             ) for (pf, reflection) in zip(parsed_files, reflections)]
             best_child.children.extend(new_nodes)
 
+        logger.info(f"Generated best_child content: {stringify_files(root.best_child.content)}")
         return root.best_child.content
 
     def process_unified_diff_output(self, output):
@@ -265,7 +267,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
             if len(block.search_block.strip()) == 0:
                 if self.verbose:
-                    print("Replacing file contents:")
+                    logger.info("Replacing file contents:")
                 modified_files[match_filepath] = block.replace_block
                 annotated_write_block = "\n".join(f"+ {line}" for line in block.replace_block.splitlines())
                 annotated_modified_files[match_filepath] = annotated_write_block
@@ -409,15 +411,15 @@ class Executor: # Uses an objective, general context for information, and a bunc
 
     def chain_execute_rewrite(self):
         plan = self.refine_plan()
-        print("PLAN")
-        print(plan)
+        logger.info("PLAN")
+        logger.info(plan)
         edited_files = self.implement_plan_rewrite(plan)
         return edited_files
 
     def chain_execute_block_edits(self):
         plan = self.refine_plan()
-        print("PLAN")
-        print(plan)
+        logger.info("PLAN")
+        logger.info(plan)
         edited_file = self.implement_plan_blocks(plan)
         return edited_file
 
@@ -566,7 +568,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
             response = self.aux_model(choice_description, [file_change_prompt], temperature=0.1)
             changes = extract_xml_tags(response, "change")
             edited_file = self.get_single_file()
-            print(response)
+            logger.info(response)
 
             for change in changes:
                 new_block = extract_xml_tags(change, "new")
@@ -660,8 +662,8 @@ class Executor: # Uses an objective, general context for information, and a bunc
                 filepath = match[0]
                 code = match[1]
                 new_files[filepath] = code
-
-        logger.info(f"Matches for code block format: {matches}")
+        logger.info(f"Matches found: \n {matches}")
+        logging.info(f"Matches for code block format: {matches}")
         dmp = dmp_module.diff_match_patch()
         dmp.Match_Threshold = 0.90
         dmp.Match_Distance = 10000
@@ -672,7 +674,7 @@ class Executor: # Uses an objective, general context for information, and a bunc
         patches = {}
         patched_files = self.files
 
-        logger.info(f"Processed patch: {new_files}")
+        logging.info(f"Processed patch: {new_files}")
 
         for filepath in new_files:
             original_filepath = filepath
@@ -682,36 +684,42 @@ class Executor: # Uses an objective, general context for information, and a bunc
             cfilepath = cfilepath.strip()
 
             logger.info(f"Closest filepath found for {trimmed_filepath}: {cfilepath}")
+            logging.info(f"Closest filepath found for {trimmed_filepath}: {cfilepath}")
 
             valid_file = True
             if cfilepath in self.files:
-                original_file = self.files[cfilepath]
+                original_file = self.files[cfilepath] + ""
                 logger.info(f"Editing existing filepath: {cfilepath}")
+                logging.info(f"Editing existing filepath: {cfilepath}")
             else:
                 # Is the filepath plausible?
                 try:
                     validate_filename(cfilepath)
                     original_file = ""
                     logger.info(f"Identified valid new file for: {cfilepath}")
+                    logging.info(f"Identified valid new file for: {cfilepath}")
                 except ValidationError as e:
                     valid_file = False
                     continue
 
             if not(valid_file):
                 logger.info(f"File received is not valid file! {cfilepath}")
+                logging.info(f"File received is not valid file! {cfilepath}")
                 continue
 
             generated_diff = dmp.diff_main(original_file, new_files[original_filepath])
             dmp.diff_cleanupSemantic(generated_diff)
             generated_patches = dmp.patch_make(original_file, generated_diff)
-            logger.info(f"Generated patches: {generated_patches}")
+            logger.info(f"Generated patches: {[str(generated_phrase) for generated_phrase in generated_patches]}")
+            logging.info(f"Generated patches: {generated_patches}")
             patched_files[cfilepath] = dmp.patch_apply(generated_patches, original_file)[0]
+            logger.info(f"Saved patch for patched_files: {cfilepath} \n \n {patched_files[cfilepath]}")
             patches[cfilepath] = dmp.patch_toText(generated_patches)
 
         end_time = time.time()
         logging.info(f"Finished processing with patches in: {end_time - start_time}")
+        logger.info(f"Patched files: \n {patched_files.keys()} \n \n {stringify_files(patched_files)}")
         logging.info(f"Patched files: \n {patched_files.keys()} \n {stringify_files(patched_files)}")
-
         return patched_files
 
 
@@ -737,5 +745,5 @@ if __name__ == "__main__":
     executor.process_rewrite(rewrite_file)
     # plan = open("/Users/vijaydaita/Files/projects/superdocs/superdocs-python/superdocs_python/train-examples/plan.txt", "r").read()
     # generated_file = executor.full_generation_single_function()
-    # print(stringify_files(generated_file))
-    # print(executor.chain_execute_block_edits())
+    # logger.info(stringify_files(generated_file))
+    # logger.info(executor.chain_execute_block_edits())

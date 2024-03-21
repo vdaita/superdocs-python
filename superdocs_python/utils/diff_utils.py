@@ -52,11 +52,14 @@ def parse_diff(diff_string):
             else:
                 search_block += line + "\n"
                 replace_block += line + "\n"
-        
+
         search_replace_blocks.append(
             SearchReplaceChange(filepath, search_block, replace_block)
         )
-    
+        filepath = ""
+        search_block = ""
+        replace_block = ""
+
     search_replace_blocks.append(
         SearchReplaceChange(filepath, search_block, replace_block)
     )
