@@ -30,8 +30,8 @@ app = typer.Typer()
 
 @app.command("run")
 def main(
-        goal: str,
         filepaths: str,
+        goal: str,
         search: bool = False,
         model_name: str ="gpt-3.5-turbo",
         aux_model_name: str="gpt-3.5-turbo",
@@ -113,7 +113,7 @@ def main(
         context = f"# Answer for request {google_request} \n {search_response}"
 
     executor = Executor(goal, files, context, model, aux_model=aux_model)
-    modifications = executor.chain_plan_and_execute_lats(generation_per_level=generation_per_level, max_height=max_height, )
+    modifications = executor.chain_plan_and_execute_lats(generation_per_level=generation_per_level, max_height=max_height, execution_prompt_type="udiff" if use_udiff else "rewrite")
 
     logging.info(f"Modifications: {modifications}")
 
