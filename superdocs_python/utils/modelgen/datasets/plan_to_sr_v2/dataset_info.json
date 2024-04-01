@@ -1,0 +1,28 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "filepath": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "file": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "location": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "code_change": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "changes": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}

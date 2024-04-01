@@ -15,6 +15,9 @@ test_diff.txt
 # Windows
 Thumbs.db
 
+./superdocs_python/utils/modelgen/datasets/*.*
+*.arrow
+
 # Source for the following rules: https://raw.githubusercontent.com/github/gitignore/master/Python.gitignore
 # Byte-compiled / optimized / DLL files
 __pycache__/

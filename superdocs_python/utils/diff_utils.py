@@ -56,9 +56,10 @@ def parse_diff(diff_string):
                 search_block += line + "\n"
                 replace_block += line + "\n"
 
-        search_replace_blocks.append(
-            SearchReplaceChange(filepath, search_block, replace_block)
-        )
+        if len(search_block.strip()) > 0 and len(replace_block.strip()) > 0:
+            search_replace_blocks.append(
+                SearchReplaceChange(filepath, search_block, replace_block)
+            )
         filepath = ""
         search_block = ""
         replace_block = ""
